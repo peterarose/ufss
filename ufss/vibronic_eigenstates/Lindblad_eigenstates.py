@@ -53,6 +53,7 @@ class Polymer:
 
         self.make_mu_dict_site_basis()
         self.make_mu_site_basis('x')
+        self.make_mu_up_dict_site_basis()
         self.make_mu_up_site_basis('x')
 
         self.set_electronic_hamiltonian()
@@ -241,6 +242,12 @@ class Polymer:
         self.mu_ket_up = self.up_list[0].copy()
         for i in range(1,len(self.up_list)):
             self.mu_ket_up += self.up_list[i]
+
+    def make_mu_up_dict_site_basis(self):
+        self.mu_up_dict = dict()
+        for pol in self.pols:
+            self.make_mu_up_site_basis(pol)
+            self.mu_up_dict[pol] = self.mu_ket_up.copy()
 
     def make_manifold_eigensystem(self,manifold_num):
         h = self.get_electronic_hamiltonian(manifold_num = manifold_num)
