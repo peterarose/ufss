@@ -18,7 +18,8 @@ import pyx
 class DiagramDrawer:
     def __init__(self):
         self.draw_functions = {'Ku':self.draw_Ku,'Kd':self.draw_Kd,'Bu':self.draw_Bu,'Bd':self.draw_Bd}
-        self.pulse_labels = ['a','b','c','d','e','f']
+        self.pulse_labels = ['a','b','c','d','e','f','g','h','i','j','k','l','m',
+                             'n','o','p','q','r','s','t','u','v','w','x','y','z']
 
     def save_diagram(self,diagram,*,folder_name = ''):
         os.makedirs(folder_name,exist_ok=True)
@@ -126,6 +127,9 @@ class DiagramGenerator(DiagramDrawer):
         # Change this, if applicable, to the maximum number of manifolds in the system under study
         self.maximum_manifold = np.inf
 
+        # Change this to a negative number, possibly -np.inf, if the initial state can be de-excited
+        self.minimum_manifold = 0
+
         # Used for automatically generating diagram instructions
         self.wavevector_dict = {'-':('Bu','Kd'),'+':('Ku','Bd')}
 
@@ -144,11 +148,26 @@ class DiagramGenerator(DiagramDrawer):
         elif detection_type == 'fluorescence':
             self.filter_instructions = self.fluorescence_detection_filter_instructions
 
+    def interaction_tuple_to_str(self,tup):
+        """Converts a tuple, tup = (nr,nc) into a string of +'s and -'s
+"""
+        s = '+'*tup[0] + '-'*tup[1]
+        return s
+
+    def set_phase_discrimination(self,interaction_list):
+        if type(interaction_list[0]) is str:
+            new_list = interaction_list
+        elif type(interaction_list[0]) is tuple:
+            new_list = [self.interaction_tuple_to_str(el) for el in interaction_list]
+
+        self.efield_wavevectors = new_list
+            
+
     def polarization_detection_filter_instructions(self,instructions):
         rho_manifold = np.array([0,0])
         for ins in instructions:
             rho_manifold += self.instruction_to_manifold_transition[ins]
-            if rho_manifold[0] < 0 or rho_manifold[1] < 0:
+            if rho_manifold[0] < self.minimum_manifold or rho_manifold[1] < self.minimum_manifold:
                 return False
             if rho_manifold[0] > self.maximum_manifold or rho_manifold[1] > self.maximum_manifold:
                 return False
@@ -161,7 +180,7 @@ class DiagramGenerator(DiagramDrawer):
         rho_manifold = np.array([0,0])
         for ins in instructions:
             rho_manifold += self.instruction_to_manifold_transition[ins]
-            if rho_manifold[0] < 0 or rho_manifold[1] < 0:
+            if rho_manifold[0] < self.minimum_manifold or rho_manifold[1] < self.minimum_manifold:
                 return False
             if rho_manifold[0] > self.maximum_manifold or rho_manifold[1] > self.maximum_manifold:
                 return False
