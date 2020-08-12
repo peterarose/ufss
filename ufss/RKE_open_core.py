@@ -16,7 +16,7 @@ import scipy
 from scipy.sparse import save_npz, load_npz, eye, csr_matrix
 from scipy.sparse.linalg import eigs
 
-from ultrafastultrafast import DiagramAutomation
+from ufss import DiagramGenerator
 from scipy.integrate import RK45
 
 class RK_rho_container:
@@ -178,7 +178,7 @@ class RK_rho_container:
     def __getitem__(self,inds):
         return self.rho[:,inds]
 
-class RKE_DensityMatrices(DiagramAutomation):
+class RKE_DensityMatrices(DiagramGenerator):
     """This class is designed to calculate perturbative wavepackets in the
         light-matter interaction given the eigenvalues of the unperturbed 
         hamiltonian and the material dipole operator evaluated in the
@@ -229,7 +229,7 @@ class RKE_DensityMatrices(DiagramAutomation):
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
 
-        DiagramAutomation.__init__(self,detection_type=detection_type)
+        DiagramGenerator.__init__(self,detection_type=detection_type)
         self.KB_dict = {'Bu':self.bra_up,'Ku':self.ket_up,'Kd':self.ket_down,'Bd':self.bra_down}
 
         # Code will not actually function until the following three empty lists are set by the user
@@ -244,6 +244,91 @@ class RKE_DensityMatrices(DiagramAutomation):
         
         # Initialize unperturbed wavefunction
         self.set_rho0_auto()
+
+    def set_pulse_delays(self,all_delays):
+        """Must be a list of numpy arrays, where each array is a
+            list of delay times between pulses
+"""
+        self.all_pulse_delays = all_delays
+        num_delays = len(self.all_pulse_delays)
+        num_pulses = len(self.efields)
+        
+        if num_delays == num_pulses - 1:
+            pass
+        elif num_delays == num_pulses - 2 and self.detection_type == 'polarization':
+            # If there is a local oscillator, it arrives simultaneously with the last pulse
+            self.all_pulse_delays.append(np.array([0]))
+        elif num_delays <= num_pulses -2:
+            raise Exception('There are not enough delay times')
+        elif num_delays >= num_pulses:
+            raise Exception('There are too many delay times')
+
+    def calculate_diagrams_all_delays(self,diagrams):
+        t0 = time.time()
+        num_delays = len(self.all_pulse_delays)
+        num_pulses = len(self.efields)
+
+        all_delay_combinations = list(itertools.product(*self.all_pulse_delays))
+        
+        signal_shape = [delays.size for delays in self.all_pulse_delays]
+        if self.detection_type == 'polarization':
+            signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
+            if len(signal_shape) == 1:
+                pass
+            else:
+                signal_shape[-1] = self.w.size
+        else:
+            signal = np.zeros((len(all_delay_combinations)),dtype='complex')
+
+        counter = 0
+        for delays in all_delay_combinations:
+            arrival_times = [0]
+            for delay in delays:
+                arrival_times.append(arrival_times[-1]+delay)
+
+            if self.detection_type == 'polarization':
+                signal[counter,:] = self.calculate_diagrams(diagrams,arrival_times)
+            else:
+                signal[counter] = self.calculate_diagrams(diagrams,arrival_times)
+            counter += 1
+
+        self.signal = signal.reshape(signal_shape)
+        self.calculation_time = time.time() - t0
+        
+        return self.signal
+        
+    def calculate_signal_all_delays(self):
+        t0 = time.time()
+        num_delays = len(self.all_pulse_delays)
+        num_pulses = len(self.efields)
+
+        all_delay_combinations = list(itertools.product(*self.all_pulse_delays))
+        
+        signal_shape = [delays.size for delays in self.all_pulse_delays]
+        if self.detection_type == 'polarization':
+            signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
+            if len(signal_shape) == 1:
+                pass
+            else:
+                signal_shape[-1] = self.w.size
+        else:
+            signal = np.zeros((len(all_delay_combinations)),dtype='complex')
+
+        counter = 0
+        for delays in all_delay_combinations:
+            arrival_times = [0]
+            for delay in delays:
+                arrival_times.append(arrival_times[-1]+delay)
+
+            if self.detection_type == 'polarization':
+                signal[counter,:] = self.calculate_signal(arrival_times)
+            else:
+                signal[counter] = self.calculate_signal(arrival_times)
+            counter += 1
+
+        self.signal = signal.reshape(signal_shape)
+        self.calculation_time = time.time() - t0
+        return self.signal
 
     def set_t(self,optical_dephasing_rate,*,dt='auto'):
         """Sets the time grid upon which all frequency-detected signals will

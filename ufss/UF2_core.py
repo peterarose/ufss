@@ -14,7 +14,7 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.interpolate import interp1d as sinterp1d
 import scipy
 
-from ultrafastultrafast import DiagramAutomation, HeavisideConvolve
+from ufss import DiagramGenerator, HeavisideConvolve
 
 def set_identical_efields(obj):
     """This should contain more"""
@@ -111,7 +111,7 @@ class psi_container:
     def __getitem__(self,inds):
         return self._psi[:,inds].copy()
 
-class Wavepackets(DiagramAutomation):
+class Wavepackets(DiagramGenerator):
     """This class is designed to calculate perturbative wavepackets in the
         light-matter interaction given the eigenvalues of the unperturbed 
         hamiltonian and the material dipole operator evaluated in the
@@ -169,7 +169,7 @@ class Wavepackets(DiagramAutomation):
             self.psi_to_signal = self.fluorescence_detection_signal
             self.f_yield = f_yield #quantum yield of doubly excited manifold relative to singly excited manifold
 
-        DiagramAutomation.__init__(self,detection_type=detection_type)
+        DiagramGenerator.__init__(self,detection_type=detection_type)
         self.K_dict = {'u':self.up,'d':self.down}
 
         # Code will not actually function until the following empty lists are set by the user

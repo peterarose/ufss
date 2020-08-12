@@ -14,7 +14,7 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.interpolate import interp1d as sinterp1d
 import scipy
 
-from ultrafastultrafast import DiagramAutomation, HeavisideConvolve
+from ufss import DiagramGenerator, HeavisideConvolve
 
 def set_identical_efields(obj):
     """This should contain more"""
@@ -118,7 +118,7 @@ class rho_container:
     def __getitem__(self,inds):
         return self._rho[:,inds].copy()
 
-class DensityMatrices(DiagramAutomation):#HeavisideConvolve,
+class DensityMatrices(DiagramGenerator):
     """This class is designed to calculate perturbative wavepackets in the
         light-matter interaction given the eigenvalues of the unperturbed 
         hamiltonian and the material dipole operator evaluated in the
@@ -173,7 +173,7 @@ class DensityMatrices(DiagramAutomation):#HeavisideConvolve,
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
 
-        DiagramAutomation.__init__(self,detection_type=detection_type)
+        DiagramGenerator.__init__(self,detection_type=detection_type)
         self.KB_dict = {'Bu':self.bra_up,'Ku':self.ket_up,'Kd':self.ket_down,'Bd':self.bra_down}
 
         # Code will not actually function until the following empty lists are set by the user
