@@ -109,7 +109,7 @@ class DiagramDrawer:
 
     
 
-class DiagramAutomation(DiagramDrawer):
+class DiagramGenerator(DiagramDrawer):
     """
 
     Args:
