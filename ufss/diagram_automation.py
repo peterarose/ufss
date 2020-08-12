@@ -122,8 +122,8 @@ class DiagramGenerator(DiagramDrawer):
         # Code will not actually function until the following three empty lists are set by the user
         self.efield_times = [] #initialize empty list of times assoicated with each electric field shape
         self.efield_wavevectors = []
-        self.identical_pulses = []
 
+        # Change this, if applicable, to the maximum number of manifolds in the system under study
         self.maximum_manifold = np.inf
 
         # Used for automatically generating diagram instructions
@@ -176,19 +176,6 @@ class DiagramGenerator(DiagramDrawer):
             f_list.append(self.wavevector_dict[i])
         return f_list
 
-    # def instructions_from_order(self,efield_order):
-    #     f_list = []
-    #     for i in efield_order:
-    #         k = self.efield_wavevectors[i]
-    #         f_list.append(self.wavevector_dict[k])
-    #     all_instructions = itertools.product(*f_list)
-    #     filtered_instructions = []
-    #     for ins in all_instructions:
-            
-    #         if self.filter_instructions(ins):
-    #             filtered_instructions.append(list(zip(ins,efield_order)))
-    #     return filtered_instructions
-
     def instructions_from_permutation(self,perm):
         f_list = []
         efield_order = []
@@ -231,36 +218,6 @@ class DiagramGenerator(DiagramDrawer):
                 psi_instructions_list.append(psi_instructions)
         return psi_instructions_list
 
-    # def remove_redundant_permutations(self,i,j):
-    #     def condition(perm):
-    #         if perm.index(j) < perm.index(i):
-    #             return True
-    #         else:
-    #             return False
-    #     return condition
-
-    # def relevant_permutations(self,pulse_time_meshes):
-    #     num_fields = len(pulse_time_meshes)
-    #     all_permutations = itertools.permutations(range(num_fields))
-    #     filtered_permutations = []
-    #     for (i,j) in self.identical_pulses:
-    #         cond = self.remove_redundant_permutations(i,j)
-    #         all_permutations = itertools.filterfalse(cond,all_permutations)
-            
-    #     for perm in all_permutations:
-    #         remove = False
-    #         for i in range(len(perm)-1):
-    #             ind0 = perm[i]
-    #             ind1 = perm[i+1]
-    #             t0 = pulse_time_meshes[ind0]
-    #             t1 = pulse_time_meshes[ind1]
-    #             if t0[0] > t1[-1]:
-    #                 remove = True
-    #                 break
-    #         if not remove:
-    #             filtered_permutations.append(perm)
-    #     return filtered_permutations
-
     def relevant_permutations(self,pulse_time_meshes):
         self.set_ordered_interactions()
         all_permutations = set(itertools.permutations(self.ordered_interactions))
@@ -282,25 +239,6 @@ class DiagramGenerator(DiagramDrawer):
             if not remove:
                 filtered_permutations.append(perm)
         return filtered_permutations
-
-    # def relevant_permutations(self,pulse_time_meshes):
-    #     self.set_ordered_interactions()
-    #     all_permutations = set(itertools.permutations(self.ordered_interactions))
-    #     filtered_permutations = []
-            
-    #     for perm in all_permutations:
-    #         remove = False
-    #         for i in range(len(perm)-1):
-    #             indi = perm[i][0]
-    #             ti = pulse_time_meshes[indi]
-    #             indj = perm[i+1][0]
-    #             tj = pulse_time_meshes[indj]
-    #             if ti[0] > tj[-1]:
-    #                 remove = True
-    #                 break
-    #         if not remove:
-    #             filtered_permutations.append(perm)
-    #     return filtered_permutations
 
     def set_ordered_interactions(self):
         """Sets up a list of the time-ordered interactions, along with associated wavevector ('+' or '-')
