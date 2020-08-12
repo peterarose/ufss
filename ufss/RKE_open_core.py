@@ -451,12 +451,12 @@ be calculated on
         
         return signal
 
-    def set_efields(self,times_list,efields_list,centers_list,wavevectors_list,*,reset_rhos = True,
+    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_rhos = True,
                     plot_fields = False):
         self.efield_times = times_list
         self.efields = efields_list
         self.centers = centers_list
-        self.efield_wavevectors = wavevectors_list
+        self.set_phase_discrimination(phase_discrimination)
         self.dts = []
         self.efield_frequencies = []
         if reset_rhos:
@@ -669,7 +669,7 @@ energy singly-excited state should be set to 0
             self.rhos = dict()
 
 
-    ### Tools for recursively calculating perturbed wavepackets using TDPT
+    ### Tools for recursively calculating perturbed density maatrices using TDPT
 
     def dipole_matrix(self,pulse_number,key,ket_flag=True,up_flag=True):
         """Calculates the dipole matrix given the electric field polarization vector,
@@ -865,7 +865,7 @@ energy singly-excited state should be set to 0
         return self.next_order(rho_in,ket_flag=False,up_flag=False,
                                pulse_number = pulse_number)
 
-    ### Tools for taking the expectation value of the dipole operator with perturbed wavepackets
+    ### Tools for taking the expectation value of the dipole operator with perturbed density matrices
     
     def dipole_down(self,rho,manifold_key,*,new_manifold_mask = None,pulse_number = -1,
                     ket_flag=True):
@@ -998,59 +998,59 @@ energy singly-excited state should be set to 0
         
         return ret_val
 
-    def integrated_dipole_expectation(self,bra_dict_original,ket_dict_original,*,pulse_number = -1):
-        """Given two wavefunctions, this computes the expectation value of the two with respect 
-to the dipole operator.  Both wavefunctions are taken to be kets, and the one named 'bra' is
-converted to a bra by taking the complex conjugate.  This assumes that the signal will be
-frequency integrated."""
-        pulse_time = self.pulse_times[pulse_number]
-        pulse_time_ind = np.argmin(np.abs(self.t - pulse_time))
+#     def integrated_dipole_expectation(self,bra_dict_original,ket_dict_original,*,pulse_number = -1):
+#         """Given two wavefunctions, this computes the expectation value of the two with respect 
+# to the dipole operator.  Both wavefunctions are taken to be kets, and the one named 'bra' is
+# converted to a bra by taking the complex conjugate.  This assumes that the signal will be
+# frequency integrated."""
+#         pulse_time = self.pulse_times[pulse_number]
+#         pulse_time_ind = np.argmin(np.abs(self.t - pulse_time))
 
-        pulse_start_ind = pulse_time_ind - self.size//2
-        pulse_end_ind = pulse_time_ind + self.size//2 + self.size%2
+#         pulse_start_ind = pulse_time_ind - self.size//2
+#         pulse_end_ind = pulse_time_ind + self.size//2 + self.size%2
         
-        # The signal is zero before the final pulse arrives, and persists
-        # until it decays. However, if no frequency information is
-        # required, fewer time points are needed for this t_slice
-        t_slice = slice(pulse_start_ind, pulse_end_ind,None)
+#         # The signal is zero before the final pulse arrives, and persists
+#         # until it decays. However, if no frequency information is
+#         # required, fewer time points are needed for this t_slice
+#         t_slice = slice(pulse_start_ind, pulse_end_ind,None)
 
-        bra_in = bra_dict_original['psi'][:,t_slice].copy()
-        ket_in = ket_dict_original['psi'][:,t_slice].copy()
+#         bra_in = bra_dict_original['psi'][:,t_slice].copy()
+#         ket_in = ket_dict_original['psi'][:,t_slice].copy()
         
         
-        manifold1_num = bra_dict_original['manifold_num']
-        manifold2_num = ket_dict_original['manifold_num']
+#         manifold1_num = bra_dict_original['manifold_num']
+#         manifold2_num = ket_dict_original['manifold_num']
 
-        bra_nonzero = bra_dict_original['bool_mask']
-        ket_nonzero = ket_dict_original['bool_mask']
+#         bra_nonzero = bra_dict_original['bool_mask']
+#         ket_nonzero = ket_dict_original['bool_mask']
         
-        # exp_factor_bra = self.unitary[manifold1_num][bra_nonzero,t_slice]
-        # exp_factor_ket = self.unitary[manifold2_num][ket_nonzero,t_slice]
+#         # exp_factor_bra = self.unitary[manifold1_num][bra_nonzero,t_slice]
+#         # exp_factor_ket = self.unitary[manifold2_num][ket_nonzero,t_slice]
         
-        # bra_in *= exp_factor_bra
-        # ket_in *= exp_factor_ket
+#         # bra_in *= exp_factor_bra
+#         # ket_in *= exp_factor_ket
 
-        bra_dict = {'bool_mask':bra_nonzero,'manifold_num':manifold1_num,'psi':bra_in}
-        ket_dict = {'bool_mask':ket_nonzero,'manifold_num':manifold2_num,'psi':ket_in}
+#         bra_dict = {'bool_mask':bra_nonzero,'manifold_num':manifold1_num,'psi':bra_in}
+#         ket_dict = {'bool_mask':ket_nonzero,'manifold_num':manifold2_num,'psi':ket_in}
 
-        if np.abs(manifold1_num - manifold2_num) != 1:
-            warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
-            return None
+#         if np.abs(manifold1_num - manifold2_num) != 1:
+#             warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
+#             return None
 
-        if manifold1_num > manifold2_num:
-            bra_new_mask = ket_dict['bool_mask']
-            bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
-                                        pulse_number = pulse_number)
-        else:
-            ket_new_mask = bra_dict['bool_mask']
-            ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
-                                        pulse_number = pulse_number)
+#         if manifold1_num > manifold2_num:
+#             bra_new_mask = ket_dict['bool_mask']
+#             bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
+#                                         pulse_number = pulse_number)
+#         else:
+#             ket_new_mask = bra_dict['bool_mask']
+#             ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
+#                                         pulse_number = pulse_number)
 
-        bra = bra_dict['psi']
-        ket = ket_dict['psi']
+#         bra = bra_dict['psi']
+#         ket = ket_dict['psi']
 
-        exp_val = np.sum(np.conjugate(bra) * ket,axis=0)
-        return exp_val
+#         exp_val = np.sum(np.conjugate(bra) * ket,axis=0)
+#         return exp_val
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):

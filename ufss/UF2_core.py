@@ -329,21 +329,19 @@ be calculated on
         for key in keys_to_remove:
             self.psis.pop(key)
 
-    def set_identical_gaussians(self,sigma_t,c,wavevectors):
+    def set_identical_gaussians(self,sigma_t,c,phase_discrimination):
         """
 """
-        efield_t = np.arange(-(self.size//2),self.size//2+self.size%2,1)
-        dt = 5/np.abs(efield_t[0])
-        efield_t = efield_t * dt * sigma_t
-        times = [efield_t] * len(wavevectors)
-        self.set_polarization_sequence(['x'] * len(wavevectors))
-        centers = [c] * len(wavevectors)
-        efields = []
-        for i in range(len(wavevectors)):
-            ef = np.exp(-self.efield_times[i]**2/(2*sigma_t**2))
-            efields.append(ef)
+        L = len(phase_discrimination) # number of pulses
+        # Delta = 10 and M = 41 hard-coded in
+        efield_t = np.linspace(-5,5,num=41)
+        times = [efield_t] * L
+        self.set_polarization_sequence(['x'] * L)
+        centers = [c] * L
+        ef = np.exp(-efield_t**2/(2*sigma_t**2))
+        efields = [ef for i in L]
 
-        self.set_efields(times_list,efields,centers,wavevectors,
+        self.set_efields(times,efields,centers,phase_discrimination,
                          reset_psis = True,plot_fields = False)
 
     def calculate_signal(self,arrival_times):
@@ -412,12 +410,12 @@ be calculated on
         return np.dot(bra,ket)
 
 
-    def set_efields(self,times_list,efields_list,centers_list,wavevectors_list,*,reset_psis = True,
+    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_psis = True,
                     plot_fields = False):
         self.efield_times = times_list
         self.efields = efields_list
         self.centers = centers_list
-        self.efield_wavevectors = wavevectors_list
+        self.set_phase_discrimination(phase_discrimination)
         self.dts = []
         self.efield_frequencies = []
         if reset_psis:
@@ -456,13 +454,13 @@ be calculated on
 
 
         if efield_tail > np.max(np.abs(efield))/100:
-            warnings.warn('Consider using larger num_conv_points, pump does not decay to less than 1% of maximum value in time domain')
+            warnings.warn('Consider using larger num_conv_points, pulse does not decay to less than 1% of maximum value in time domain')
             
         efield_fft = fftshift(fft(ifftshift(efield)))*self.dt
         efield_fft_tail = np.max(np.abs([efield_fft[0],efield_fft[-1]]))
         
         if efield_fft_tail > np.max(np.abs(efield_fft))/100:
-            warnings.warn('''Consider using smaller value of dt, pump does not decay to less than 1% of maximum value in frequency domain''')
+            warnings.warn('''Consider using smaller value of dt, pulse does not decay to less than 1% of maximum value in frequency domain''')
 
         if plot_fields:
             fig, axes = plt.subplots(1,2)
