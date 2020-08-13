@@ -34,7 +34,6 @@ def plot2D(x,y,z,contour_levels = None,part = 'complex',norm = 1,vmax='max',cont
         Z = z
     if norm == 'self':
         norm = np.max(np.abs(Z))
-        print('Using norm ',norm)
     Z = Z/norm
     if contour_flag:
         if part == 'complex':
