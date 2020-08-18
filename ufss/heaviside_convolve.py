@@ -13,7 +13,6 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 import scipy
 from scipy.interpolate import interp1d as sinterp1d
 
-from ultrafastultrafast import DiagramAutomation
 
 class HeavisideConvolve:
     """This class calculates the discrete convolution of an array with the 

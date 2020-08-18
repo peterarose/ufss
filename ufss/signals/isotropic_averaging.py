@@ -12,8 +12,6 @@ import yaml
 import matplotlib.pyplot as plt
 from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 
-#TransientAbsorption implemented using UF2
-from ultrafastultrafast.signals import TransientAbsorption
 
 """The following definitions of I4_mat and kdelvec are based
 upon the formulas given in Appendix B of Molecular Quantum 
