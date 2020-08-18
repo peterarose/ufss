@@ -19,4 +19,5 @@ To get started with this code, clone this repo and have a look at the four jupyt
 Installation instructions coming soon
 
 [1] Peter A. Rose and Jacob J. Krich, "Automatic Feynman diagram generation for nonlinear optical spectroscopies", arXiv:2008.05081
+
 [2] Peter A. Rose and Jacob J. Krich, "Efficient numerical method for predicting nonlinear optical spectroscopies of open systems", arXiv:2008.05082
