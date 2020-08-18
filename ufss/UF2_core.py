@@ -442,19 +442,19 @@ be calculated on
             except:
                 self.local_oscillator = copy.deepcopy(self.efields[-1])
 
-        for field in self.efields:
-            if len(field) == 1:
-                # M = 1 is the impulsive limit
-                pass
-            else:
-                self.check_efield_resolution(field,plot_fields = plot_fields)
+        # for field in self.efields:
+        #     if len(field) == 1:
+        #         # M = 1 is the impulsive limit
+        #         pass
+        #     else:
+        #         self.check_efield_resolution(field,plot_fields = plot_fields)
 
     def check_efield_resolution(self,efield,*,plot_fields = False):
         efield_tail = np.max(np.abs([efield[0],efield[-1]]))
 
 
         if efield_tail > np.max(np.abs(efield))/100:
-            warnings.warn('Consider using larger num_conv_points, pulse does not decay to less than 1% of maximum value in time domain')
+            warnings.warn('Consider using larger time interval, pulse does not decay to less than 1% of maximum value in time domain')
             
         efield_fft = fftshift(fft(ifftshift(efield)))*self.dt
         efield_fft_tail = np.max(np.abs([efield_fft[0],efield_fft[-1]]))
