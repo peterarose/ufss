@@ -490,8 +490,8 @@ be calculated on
             except:
                 self.local_oscillator = copy.deepcopy(self.efields[-1])
 
-        for i in range(len(self.efields)):
-            self.check_efield_resolution(i,plot_fields = plot_fields)
+        # for i in range(len(self.efields)):
+        #     self.check_efield_resolution(i,plot_fields = plot_fields)
                 
 
     def check_efield_resolution(self,pulse_number,*,plot_fields = False):
@@ -505,13 +505,13 @@ be calculated on
 
 
         if efield_tail > np.max(np.abs(efield))/100:
-            warnings.warn('Consider using larger num_conv_points, pump does not decay to less than 1% of maximum value in time domain')
+            warnings.warn('Consider using larger time interval, pulse does not decay to less than 1% of maximum value in time domain')
             
         efield_fft = fftshift(fft(ifftshift(efield)))*dt
         efield_fft_tail = np.max(np.abs([efield_fft[0],efield_fft[-1]]))
         
         if efield_fft_tail > np.max(np.abs(efield_fft))/100:
-            warnings.warn('''Consider using smaller value of dt, pump does not decay to less than 1% of maximum value in frequency domain''')
+            warnings.warn('''Consider using smaller value of dt, pulse does not decay to less than 1% of maximum value in frequency domain''')
 
         if plot_fields:
             fig, axes = plt.subplots(1,2)
