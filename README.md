@@ -12,8 +12,11 @@ Contains 4 separate modules:
 4. Hamiltonian/Liouvillian Generator (HLG) - tool for generating vibronic Hamiltonians and (optionally) Liouvillians from simple parameter inputs
 
 This code depends upon the following packages:
-numpy,matplotlib,pyfftw,scipy>=1,pyyaml
+numpy,matplotlib,pyfftw,scipy>=1,pyyaml,pyx
 
-In order to try this code out, you can download this repo and run the jupyter notebooks contained within.
+To get started with this code, clone this repo and have a look at the four jupyter notebooks contained within. They give examples of working with the diagram generator and generating spectroscopic signals. They also show how to generate figures in the manuscripts describing UFSS.
 
 Installation instructions coming soon
+
+[1] Peter A. Rose and Jacob J. Krich, "Automatic Feynman diagram generation for nonlinear optical spectroscopies", arXiv:2008.05081
+[2] Peter A. Rose and Jacob J. Krich, "Efficient numerical method for predicting nonlinear optical spectroscopies of open systems", arXiv:2008.05082
