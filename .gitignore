@@ -1,3 +1,7 @@
+build/
+dist/
+ufss.egg-info/
+upload_new_pypi_version.sh
 __pycache__/
 v_3LS/
 UF2_test/
