@@ -15,6 +15,8 @@ from scipy.interpolate import interp1d as sinterp1d
 import scipy
 import pyx
 
+pyx.text.set(pyx.text.UnicodeEngine)
+
 class DiagramDrawer:
     def __init__(self):
         self.draw_functions = {'Ku':self.draw_Ku,'Kd':self.draw_Kd,'Bu':self.draw_Bu,'Bd':self.draw_Bd}
