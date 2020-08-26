@@ -154,8 +154,6 @@ class ManualL:
         mu_bra_up = np.kron(II,self.mu_ket_up)
         mu_bra_down = np.kron(II,self.mu_ket_up.T)
 
-        print(mu_ket_up.shape)
-
         mu_mask_tol = 10
         
         mu_ket_up_t = np.dot(np.dot(evl,mu_ket_up),ev)
