@@ -3,7 +3,7 @@ Code for simulating nonlinear optical spectroscopies of closed and open systems
 
 ## Taking a test drive in Google's Colaboratory
 To try ufss without installing or downloading the repository,
-follow this link to see examples using the Diagram Generatorjupyter:  
+follow this link to see examples using the Diagram Generator:  
 https://colab.research.google.com/github/peterarose/ufss/blob/master/DiagramGeneratorExample_Colab.ipynb  
 and this link to see examples using the Hamiltonian/Liouvillian Generator and open UF$^2$:
 coming soon  
