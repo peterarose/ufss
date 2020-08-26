@@ -164,14 +164,18 @@ class DensityMatrices(DiagramGenerator):
         if detection_type == 'polarization':
             self.rho_to_signal = self.polarization_detection_rho_to_signal
             self.return_complex_signal = False
+            
         elif detection_type == 'complex_polarization':
             self.rho_to_signal = self.polarization_detection_rho_to_signal
             self.return_complex_signal = True
             detection_type = 'polarization'
+            
         elif detection_type == 'integrated_polarization':
             self.rho_to_signal = self.integrated_polarization_detection_rho_to_signal
+            
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
+            
 
         DiagramGenerator.__init__(self,detection_type=detection_type)
         self.KB_dict = {'Bu':self.bra_up,'Ku':self.ket_up,'Kd':self.ket_down,'Bd':self.bra_down}
@@ -410,12 +414,6 @@ be calculated on
             pass
         
         self.pulse_times = arrival_times
-        if self.detection_type == 'polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'integrated_polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
             
         self.current_instructions = diagram_instructions
         instructions = diagram_instructions[0]
