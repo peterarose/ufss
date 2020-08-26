@@ -11,6 +11,8 @@ import numpy as np
 import pyx
 
 class DiagramDrawer:
+    """This class is used to draw double-sided Feynman diagrams and save them as pdf files
+"""
     def __init__(self):
         self.draw_functions = {'Ku':self.draw_Ku,'Kd':self.draw_Kd,'Bu':self.draw_Bu,'Bd':self.draw_Bd}
         self.pulse_labels = ['a','b','c','d','e','f','g','h','i','j','k','l','m',
@@ -109,7 +111,7 @@ class DiagramGenerator(DiagramDrawer):
     """
 
     Args:
-        detection_type (str): either 'polarization' or 'fluorescence'
+        detection_type (str): default is 'polarization', other options are 'integrated_polarization' or 'fluorescence'
 
 """
     def __init__(self,*,detection_type = 'polarization'):
@@ -133,12 +135,9 @@ class DiagramGenerator(DiagramDrawer):
                                                    'Bd':np.array([0,-1]),
                                                    'Ku':np.array([1,0]),
                                                    'Kd':np.array([-1,0])}
-
         self.detection_type = detection_type
         
-        if detection_type == 'polarization':
-            self.filter_instructions = self.polarization_detection_filter_instructions
-        elif detection_type == 'integrated_polarization':
+        if detection_type == 'polarization' or detection_type == 'integrated_polarization':
             self.filter_instructions = self.polarization_detection_filter_instructions
         elif detection_type == 'fluorescence':
             self.filter_instructions = self.fluorescence_detection_filter_instructions
@@ -266,9 +265,7 @@ class DiagramGenerator(DiagramDrawer):
 
     def get_diagrams(self,arrival_times):
         
-        if self.detection_type == 'polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'integrated_polarization':
+        if self.detection_type == 'polarization' or self.detection_type == 'integrated_polarization':
             times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
         elif self.detection_type == 'fluorescence':
             times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
