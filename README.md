@@ -5,7 +5,7 @@ Code for simulating nonlinear optical spectroscopies of closed and open systems
 To try ufss without installing or downloading the repository,
 follow this link to see examples using the Diagram Generator:  
 https://colab.research.google.com/github/peterarose/ufss/blob/master/DiagramGeneratorExample_Colab.ipynb  
-and this link to see examples using the Hamiltonian/Liouvillian Generator and open UF$^2$:
+and this link to see examples using the Hamiltonian/Liouvillian Generator and open UF2:
 coming soon  
 (Note: Google's Coloaboratory gives a warning message about running Jupyter
 notebooks not authored by Google. When prompted by the warning, select
@@ -18,7 +18,7 @@ pip install ufss
 (Note: ufss is only written for python 3, so you may need to run
 pip3 install ufss if pip points to python 2 on your machine)  
 
-Visualizing Feynman diagrams requires a $\TeX$ distribution
+Visualizing Feynman diagrams requires a TeX distribution
 
 ## Overview
 
