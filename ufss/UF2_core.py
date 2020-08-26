@@ -155,17 +155,18 @@ class Wavepackets(DiagramGenerator):
         self.load_mu()
 
         if detection_type == 'polarization':
-            self.filter_instructions = self.polarization_detection_filter_instructions
             self.psi_to_signal = self.polarization_detection_signal
             self.return_complex_signal = False
+            
         elif detection_type == 'complex_polarization':
-            self.filter_instructions = self.polarization_detection_filter_instructions
             self.psi_to_signal = self.polarization_detection_signal
             self.return_complex_signal = True
             detection_type = 'polarization'
             
+        elif detection_type == 'integrated_polarization':
+            self.psi_to_signal = self.integrated_polarization_detection_signal
+            
         elif detection_type == 'fluorescence':
-            self.filter_instructions = self.fluorescence_detection_filter_instructions
             self.psi_to_signal = self.fluorescence_detection_signal
             self.f_yield = f_yield #quantum yield of doubly excited manifold relative to singly excited manifold
 
@@ -399,6 +400,10 @@ be calculated on
     def polarization_detection_signal(self,bra_dict,ket_dict):
         p_of_t = self.dipole_expectation(bra_dict,ket_dict,pulse_number = -1)
         return self.polarization_to_signal(p_of_t,local_oscillator_number=-1)
+
+    def integrated_polarization_detection_rho_to_signal(self,bra_dict,ket_dict):
+        p = self.integrated_dipole_expectation(bra_dict,ket_dict,pulse_number=-1)
+        return self.integrated_polarization_to_signal(p,local_oscillator_number=-1)
 
     def fluorescence_detection_signal(self,bra_dict,ket_dict,*,time_index = -1):
         """Calculate inner product given an input bra and ket dictionary
@@ -1029,6 +1034,62 @@ alias transitions onto nonzero electric field amplitudes.
         # set non-zero values using t_slice
         ret_val[pulse_start_ind:] = exp_val
         return ret_val
+
+    def integrated_dipole_expectation(self,bra_in,ket_in,*,pulse_number = -1):
+        """Computes the expectation value of the two wavefunctions with respect 
+            to the dipole operator.  Both wavefunctions are taken to be kets, and the one 
+            named 'bra' is converted to a bra by taking the complex conjugate."""
+        t0 = time.time()
+        pulse_time = self.pulse_times[pulse_number]
+
+        efield_t = self.efield_times[pulse_number]
+        
+        # The signal is zero before the final pulse arrives, and persists
+        # until it decays. Therefore we avoid taking the sum at times
+        # where the signal is zero.
+        t = efield_t + pulse_time
+
+        manifold1_key = bra_in.manifold_key
+        manifold2_key = ket_in.manifold_key
+
+        manifold1_num = self.manifold_key_to_number(manifold1_key)
+        manifold2_num = self.manifold_key_to_number(manifold2_key)
+
+        bra_nonzero = bra_in.bool_mask
+        ket_nonzero = ket_in.bool_mask
+
+        bra_ev = self.eigenvalues[manifold1_key][bra_nonzero]
+        ket_ev = self.eigenvalues[manifold2_key][ket_nonzero]
+
+        e_center = -self.centers[pulse_number]
+
+        bra_in = bra_in(t) * np.exp(-1j*bra_ev[:,np.newaxis]*t[np.newaxis,:])
+        ket_in = ket_in(t1) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t[np.newaxis,:])
+        
+        bra_dict = {'bool_mask':bra_nonzero,'manifold_key':manifold1_key,'psi':bra_in}
+        ket_dict = {'bool_mask':ket_nonzero,'manifold_key':manifold2_key,'psi':ket_in}
+
+        if np.abs(manifold1_num - manifold2_num) != 1:
+            warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
+            return None
+        t0 = time.time()
+        if manifold1_num > manifold2_num:
+            bra_new_mask = ket_dict['bool_mask']
+            bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
+                                        pulse_number = pulse_number)
+        else:
+            ket_new_mask = bra_dict['bool_mask']
+            ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
+                                        pulse_number = pulse_number)
+        
+        bra_in = bra_dict['psi']
+        ket_in = ket_dict['psi']
+
+        exp_val = np.sum(np.conjugate(bra_in) * ket_in,axis=0)
+        t1 = time.time()
+        self.expectation_time += t1-t0
+        
+        return exp_val
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
