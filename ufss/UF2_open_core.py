@@ -200,7 +200,9 @@ class DensityMatrices(DiagramGenerator):
         
         if num_delays == num_pulses - 1:
             pass
-        elif num_delays == num_pulses - 2 and self.detection_type == 'polarization':
+        elif num_delays == (num_pulses - 2 and
+                            (self.detection_type == 'polarization' or
+                             self.detection_type == 'integrated_polarization')):
             # If there is a local oscillator, it arrives simultaneously with the last pulse
             self.all_pulse_delays.append(np.array([0]))
         elif num_delays <= num_pulses -2:
