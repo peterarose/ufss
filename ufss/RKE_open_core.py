@@ -220,12 +220,16 @@ class RKE_DensityMatrices(DiagramGenerator):
         if detection_type == 'polarization':
             self.rho_to_signal = self.polarization_detection_rho_to_signal
             self.return_complex_signal = False
+            
         elif detection_type == 'complex_polarization':
             self.rho_to_signal = self.polarization_detection_rho_to_signal
             self.return_complex_signal = True
             detection_type = 'polarization'
+            
         elif detection_type == 'integrated_polarization':
+            raise Exception('detection_type: Integrated polarization is not implemented for Open RKE')
             self.rho_to_signal = self.integrated_polarization_detection_rho_to_signal
+            
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
 
