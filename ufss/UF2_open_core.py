@@ -200,7 +200,7 @@ class DensityMatrices(DiagramGenerator):
         
         if num_delays == num_pulses - 1:
             pass
-        elif num_delays == (num_pulses - 2 and
+        elif (num_delays == num_pulses - 2 and
                             (self.detection_type == 'polarization' or
                              self.detection_type == 'integrated_polarization')):
             # If there is a local oscillator, it arrives simultaneously with the last pulse
@@ -385,18 +385,17 @@ be calculated on
         except:
             self.set_current_diagram_instructions(times)
 
-        if len(self.current_instructions) == 0:
-            print(arrival_times)
-
         t1 = time.time()
-        try:
+        
+        if len(self.current_instructions) == 0:
+            print('No diagrams for arrival times ',arrival_times)
+            signal = 0
+        else:
             instructions = self.current_instructions[0]
             signal = self.execute_diagram(instructions)
             for instructions in self.current_instructions[1:]:
                 signal += self.execute_diagram(instructions)
-        except IndexError:
-            print('error')
-            signal = 0
+
 
         t2 = time.time()
         self.automation_time += t1-t0
@@ -1193,8 +1192,8 @@ alias transitions onto nonzero electric field amplitudes.
 
     def integrated_dipole_expectation(self,rho_in,*,ket_flag=True):
         """Computes the expectation value of the dipole operator"""
-        # the density matrix object knows which pulse caused the most recenter interaction
-        pulse_number = rho_in.pulse_number
+        
+        pulse_number = -1
         
         pulse_time = self.pulse_times[pulse_number]
         t = pulse_time + self.efield_times[pulse_number]
@@ -1224,6 +1223,42 @@ alias transitions onto nonzero electric field amplitudes.
         self.expectation_time += tb-t0
 
         return exp_val
+
+    def get_local_oscillator(self):
+        local_oscillator_number = -1
+        efield_t = self.efield_times[local_oscillator_number]
+        efield = self.efields[local_oscillator_number]
+
+        if efield_t.size == 1:
+            # Impulsive limit: delta in time is flat in frequency
+            efield_ft = np.ones(self.w.size)*efield
+            return efield_ft
+        
+        e_dt = efield_t[1] - efield_t[0]
+        dt = self.t[1] - self.t[0]
+            
+        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
+            full_efield = np.zeros(self.t.size,dtype='complex')
+
+            # the local oscillator sets the "zero" on the clock
+            pulse_time_ind = np.argmin(np.abs(self.t))
+
+            pulse_start_ind = pulse_time_ind - efield_t.size//2
+            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
+
+            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
+            
+            full_efield[t_slice] = efield
+            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+        else:
+            efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
+            efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
+            fill_value = (efield_ft[0],efield_ft[-1])
+            f = sinterp1d(efield_w,efield_ft,fill_value = fill_value,
+                          bounds_error=False,kind='quadratic')
+            efield_ft = f(self.w)
+
+        return efield_ft
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
@@ -1235,24 +1270,8 @@ alias transitions onto nonzero electric field amplitudes.
         t = self.t[undersample_slice]
         dt = t[1] - t[0]
         pulse_time = self.pulse_times[local_oscillator_number]
-        
-        efield_t = self.efield_times[local_oscillator_number]
 
-        # the local oscillator sets the "zero" on the clock
-        pulse_time_ind = np.argmin(np.abs(self.t))
-        efield = np.zeros(self.t.size,dtype='complex')
-
-        if efield_t.size == 1:
-            # Impulsive limit: delta in time is flat in frequency
-            efield = np.ones(self.w.size)*self.efields[local_oscillator_number]
-        else:
-            pulse_start_ind = pulse_time_ind - efield_t.size//2
-            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
-
-            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-            
-            efield[t_slice] = self.efields[local_oscillator_number]
-            efield = fftshift(ifft(ifftshift(efield)))*efield.size*dt#/np.sqrt(2*np.pi)
+        efield = self.get_local_oscillator()
 
         halfway = self.w.size//2
         pm = self.w.size//(2*undersample_factor)
@@ -1260,7 +1279,7 @@ alias transitions onto nonzero electric field amplitudes.
         efield_max_ind = halfway + pm + self.w.size%2
         efield = efield[efield_min_ind:efield_max_ind]
 
-        P_of_w = fftshift(ifft(ifftshift(P_of_t)))*P_of_t.size*dt#/np.sqrt(2*np.pi)
+        P_of_w = fftshift(ifft(ifftshift(P_of_t)))*P_of_t.size*dt
 
         signal = P_of_w * np.conjugate(efield)
         if not self.return_complex_signal:
