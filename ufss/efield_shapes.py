@@ -17,8 +17,8 @@ def exponential(t,sigma):
 def lorentzian(t,sigma):
     """t is time.  Lorentzian pulse, with time-domain width sigma, 
     normalized to behave like a delta function as sigma -> 0"""
-    pre = sigma/np.pi
-    return pre / (t**2 + sigma**2)
+    pre = sigma/2/np.pi
+    return pre / (t**2 + (sigma/2)**2)
 
 def sech(t,sigma):
     pre = 1/(np.pi*sigma)
