@@ -587,7 +587,7 @@ energy singly-excited state should be set to 0
             self.eigenvectors = {key:eigvec_archive[key] for key in self.manifolds}
 
         if '0' in self.manifolds:
-            self.ordered_manifolds = [i for i in range(len(self.manifolds))]
+            self.ordered_manifolds = [str(i) for i in range(len(self.manifolds))]
         else:
             self.ordered_manifolds = ['GSM','SEM','DEM','TEM','QEM']
         
