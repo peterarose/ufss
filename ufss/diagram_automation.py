@@ -141,6 +141,11 @@ class DiagramGenerator(DiagramDrawer):
             self.filter_instructions = self.polarization_detection_filter_instructions
         elif detection_type == 'fluorescence':
             self.filter_instructions = self.fluorescence_detection_filter_instructions
+        elif detection_type == 'no_filter':
+            self.filter_instructions = self.no_filter
+        else:
+            warnings.warn('Did not recognize detection_type keyword argument, will return all causal diagrams')
+            self.filter_instructions
 
     def interaction_tuple_to_str(self,tup):
         """Converts a tuple, tup = (nr,nc) into a string of +'s and -'s
@@ -182,6 +187,9 @@ class DiagramGenerator(DiagramDrawer):
             return True
         else:
             return False
+
+    def no_filter(self,instructions):
+        return True
 
     def set_f_list(self):
         f_list = []
