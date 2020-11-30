@@ -14,14 +14,15 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.interpolate import interp1d as sinterp1d
 import scipy
 
-from ufss import DiagramGenerator, HeavisideConvolve
+from ufss import DiagramGenerator
+from ufss.UF2.heaviside_convolve import HeavisideConvolve
 
 def set_identical_efields(obj):
     """This should contain more"""
     obj.efields = []
 
-class rho_container:
-    def __init__(self,t,rho,bool_mask,pulse_number,manifold_key,*,interp_kind='linear',
+class psi_container:
+    def __init__(self,t,psi,bool_mask,pulse_number,manifold_key,*,interp_kind='linear',
                  interp_left_fill=0):
         self.bool_mask = bool_mask
         self.pulse_number = pulse_number
@@ -29,53 +30,51 @@ class rho_container:
         
         
         if t.size == 1:
-            self.impulsive = True
-            n, M = rho.shape
+            n, M = psi.shape
             self.M = M+2
             self.n = n
             self.t = np.array([-1,0,1],dtype='float') * np.spacing(t[0]) + t[0]
-            rho_new = np.zeros((n,3),dtype='complex')
-            rho_new[:,0] = interp_left_fill
-            rho_new[:,1] = (1 + interp_left_fill)/2 * rho[:,0]
-            rho_new[:,2] = rho[:,0]
-            self.asymptote = rho[:,-1]
-            self.rho = rho_new
+            psi_new = np.zeros((n,3),dtype='complex')
+            psi_new[:,0] = interp_left_fill
+            psi_new[:,1] = (1 + interp_left_fill)/2 * psi[:,0]
+            psi_new[:,2] = psi[:,0]
+            self.asymptote = psi[:,-1]
+            self.psi = psi_new
             
-            self._rho = rho_new
+            self._psi = psi_new
 
-            self.rho_fun = self.impulsive_rhofun(self.asymptote,left_fill = interp_left_fill)
+            self.psi_fun = self.impulsive_psifun(self.asymptote,left_fill = interp_left_fill)
             
         else:
-            self.impulsive = False
             self.t = t
-            self.rho = rho
-            self._rho = self.extend(rho,left_fill = interp_left_fill)
-            self.rho_fun = self.make_interpolant(kind=interp_kind,
+            self.psi = psi
+            self._psi = self.extend(psi,left_fill = interp_left_fill)
+            self.psi_fun = self.make_interpolant(kind=interp_kind,
                                                  left_fill=interp_left_fill)
         
-    def extend(self,rho,*,left_fill = 0):
-        n, M = rho.shape
+    def extend(self,psi,*,left_fill = 0):
+        n, M = psi.shape
         self.M = M
         self.n = n
-        new_rho = np.zeros((n,3*M),dtype='complex')
-        new_rho[:,0:M] = left_fill
-        new_rho[:,M:2*M] = rho
-        asymptote = rho[:,-1]
+        new_psi = np.zeros((n,3*M),dtype='complex')
+        new_psi[:,0:M] = left_fill
+        new_psi[:,M:2*M] = psi
+        asymptote = psi[:,-1]
         self.asymptote = asymptote
-        new_rho[:,2*M:] = asymptote[:,np.newaxis]
+        new_psi[:,2*M:] = asymptote[:,np.newaxis]
 
-        return new_rho
+        return new_psi
 
     def make_interpolant(self,*, kind='cubic', left_fill=0):
         """Interpolates density matrix and pads using 0 to the left
-            and rho[-1] to the right
+            and psi[-1] to the right
 """
         left_fill = np.ones(self.n,dtype='complex')*left_fill
-        right_fill = self.rho[:,-1]
-        return sinterp1d(self.t,self.rho,fill_value = (left_fill,right_fill),
+        right_fill = self.psi[:,-1]
+        return sinterp1d(self.t,self.psi,fill_value = (left_fill,right_fill),
                          assume_sorted=True,bounds_error=False,kind=kind)
 
-    def impulsive_rhofun(self,asymptote,left_fill=0):
+    def impulsive_psifun(self,asymptote,left_fill=0):
         if left_fill == 0:
             def f(t):
                 return asymptote[:,np.newaxis] * np.heaviside(t-self.t[1],0.5)[np.newaxis,:]
@@ -88,37 +87,32 @@ class rho_container:
         return f
 
     def __call__(self,t):
-        if self.impulsive:
-            # The 
-            return self.rho_fun(t)
-
-        # the following logic is designed to speed up calculations outside of the impulsive limit
         if type(t) is np.ndarray:
             if t[0] > self.t[-1]:
                 if t.size <= self.M:
-                    ans = self._rho[:,-t.size:].copy()
+                    ans = self._psi[:,-t.size:].copy()
                 else:
                     ans = np.ones(t.size,dtype='complex')[np.newaxis,:] * self.asymptote[:,np.newaxis]
             elif t[-1] < self.t[0]:
                 if t.size <= self.M:
-                    ans = self._rho[:,:t.size].copy()
+                    ans = self._psi[:,:t.size].copy()
                 else:
                     ans = np.zeros((self.n,t.size),dtype='complex')
             elif t.size == self.M:
                 if np.allclose(t,self.t):
-                    ans = self.rho.copy()
+                    ans = self.psi.copy()
                 else:
-                    ans = self.rho_fun(t)
+                    ans = self.psi_fun(t)
             else:
-                ans = self.rho_fun(t)
+                ans = self.psi_fun(t)
         else:
-                ans = self.rho_fun(t)
+                ans = self.psi_fun(t)
         return ans
 
     def __getitem__(self,inds):
-        return self._rho[:,inds].copy()
+        return self._psi[:,inds].copy()
 
-class DensityMatrices(DiagramGenerator):
+class Wavepackets(DiagramGenerator):
     """This class is designed to calculate perturbative wavepackets in the
         light-matter interaction given the eigenvalues of the unperturbed 
         hamiltonian and the material dipole operator evaluated in the
@@ -135,7 +129,7 @@ class DensityMatrices(DiagramGenerator):
         initial_state (int): index of initial state for psi^0
 
 """
-    def __init__(self,file_path,*,
+    def __init__(self,file_path,*, num_conv_points=41,
                  initial_state=0, total_num_time_points = None,
                  detection_type = 'polarization'):
         self.slicing_time = 0
@@ -148,8 +142,6 @@ class DensityMatrices(DiagramGenerator):
         self.dipole_time = 0
         self.automation_time = 0
         self.diagram_to_signal_time = 0
-        self.diagram_generation_counter = 0
-        self.number_of_diagrams_calculated = 0
         
         self.base_path = file_path
 
@@ -157,28 +149,30 @@ class DensityMatrices(DiagramGenerator):
 
         self.gamma_res = 6.91
 
+        self.initial_state = initial_state
+
         self.load_eigensystem()
 
         self.load_mu()
 
         if detection_type == 'polarization':
-            self.rho_to_signal = self.polarization_detection_rho_to_signal
+            self.psi_to_signal = self.polarization_detection_signal
             self.return_complex_signal = False
             
         elif detection_type == 'complex_polarization':
-            self.rho_to_signal = self.polarization_detection_rho_to_signal
+            self.psi_to_signal = self.polarization_detection_signal
             self.return_complex_signal = True
             detection_type = 'polarization'
             
         elif detection_type == 'integrated_polarization':
-            self.rho_to_signal = self.integrated_polarization_detection_rho_to_signal
+            self.psi_to_signal = self.integrated_polarization_detection_signal
             
         elif detection_type == 'fluorescence':
-            self.rho_to_signal = self.fluorescence_detection_rho_to_signal
-            
+            self.psi_to_signal = self.fluorescence_detection_signal
+            self.f_yield = f_yield #quantum yield of doubly excited manifold relative to singly excited manifold
 
         DiagramGenerator.__init__(self,detection_type=detection_type)
-        self.KB_dict = {'Bu':self.bra_up,'Ku':self.ket_up,'Kd':self.ket_down,'Bd':self.bra_down}
+        self.K_dict = {'u':self.up,'d':self.down}
 
         # Code will not actually function until the following empty lists are set by the user
         self.efields = [] #initialize empty list of electric field shapes
@@ -188,7 +182,8 @@ class DensityMatrices(DiagramGenerator):
         self.pulse_times = [] #initialize empty list of pulse arrival times
         self.centers = [] #initialize empty list of pulse center frequencies
         self.efield_wavevectors = []
-        self.rhos = dict()
+        self.heaviside_convolve_list = []
+        self.psis = dict()
 
     def set_pulse_delays(self,all_delays):
         """Must be a list of numpy arrays, where each array is a
@@ -200,9 +195,7 @@ class DensityMatrices(DiagramGenerator):
         
         if num_delays == num_pulses - 1:
             pass
-        elif (num_delays == num_pulses - 2 and
-                            (self.detection_type == 'polarization' or
-                             self.detection_type == 'integrated_polarization')):
+        elif num_delays == num_pulses - 2 and self.detection_type == 'polarization':
             # If there is a local oscillator, it arrives simultaneously with the last pulse
             self.all_pulse_delays.append(np.array([0]))
         elif num_delays <= num_pulses -2:
@@ -240,8 +233,8 @@ class DensityMatrices(DiagramGenerator):
             counter += 1
 
         self.signal = signal.reshape(signal_shape)
+
         self.calculation_time = time.time() - t0
-        
         return self.signal
         
     def calculate_signal_all_delays(self):
@@ -274,6 +267,7 @@ class DensityMatrices(DiagramGenerator):
             counter += 1
 
         self.signal = signal.reshape(signal_shape)
+
         self.calculation_time = time.time() - t0
         return self.signal
 
@@ -291,33 +285,51 @@ be calculated on
         self.w = fftshift(fftfreq(self.t.size,d=dt)*2*np.pi)
 
     def execute_diagram(self,instructions):
-        self.number_of_diagrams_calculated += 1
-        r = self.rho0
-        name = ''
-        for i in range(len(instructions)):
-            key, num = instructions[i]
-            name += key+str(num)
+        num_instructions = len(instructions['ket']) + len(instructions['bra'])
+        
+        ket = self.psi0
+        bra = self.psi0
+        ketname = ''
+        braname = ''
+        ket_instructions = instructions['ket']
+        bra_instructions = instructions['bra']
+        for i in range(len(ket_instructions)):
+            key, num = ket_instructions[i]
+            ketname += key+str(num)
             # Try to re-use previous calculations, if they exist
             try:
-                new_r = self.rhos[name]
+                new_ket = self.psis[ketname]
             except KeyError:
-                new_r = self.KB_dict[key](r,pulse_number=num)
-                self.rhos[name] = new_r
-            r = new_r
-            
-        sig = self.rho_to_signal(r)
+                new_ket = self.K_dict[key](ket,pulse_number=num)
+                self.psis[ketname] = new_ket
+            ket = new_ket
+                
+
+        for i in range(len(bra_instructions)):
+            key, num = bra_instructions[i]
+            braname += key+str(num)
+            # Try to re-use previous calculations, if they exist
+            try:
+                new_bra = self.psis[braname]
+            except KeyError:
+                new_bra = self.K_dict[key](bra,pulse_number=num)
+                self.psis[braname] = new_bra
+            bra = new_bra
+                
+        sig = self.psi_to_signal(bra,ket)
+
         return sig
 
-    def remove_rhos_by_pulse_number(self,pulse_number):
+    def remove_psis_by_pulse_number(self,pulse_number):
         num = str(pulse_number)
-        keys = self.rhos.keys()
+        keys = self.psis.keys()
         keys_to_remove = []
         for key in keys:
             flag = key.find(num)
             if flag >= 0:
                 keys_to_remove.append(key)
         for key in keys_to_remove:
-            self.rhos.pop(key)
+            self.psis.pop(key)
 
     def set_identical_gaussians(self,sigma_t,c,phase_discrimination):
         """
@@ -332,18 +344,7 @@ be calculated on
         efields = [ef for i in L]
 
         self.set_efields(times,efields,centers,phase_discrimination,
-                         reset_rhos = True,plot_fields = False)
-
-    def set_current_diagram_instructions(self,times):
-        self.diagram_generation_counter += 1
-        t0a = time.time()
-        efield_permutations = self.relevant_permutations(times)
-        diagram_instructions = []
-        for perm in efield_permutations:
-            diagram_instructions += self.instructions_from_permutation(perm)
-        self.current_instructions = diagram_instructions
-        t0b = time.time()
-        self.diagram_generation_time = t0b - t0a
+                         reset_psis = True,plot_fields = False)
 
     def calculate_signal(self,arrival_times):
         t0 = time.time()
@@ -351,58 +352,28 @@ be calculated on
             old_pulse_times = self.pulse_times
             for i in range(len(old_pulse_times)):
                 if old_pulse_times[i] != arrival_times[i]:
-                    self.remove_rhos_by_pulse_number(i)
+                    self.remove_psis_by_pulse_number(i)
         except AttributeError:
             pass
         
         self.pulse_times = arrival_times
-        if self.detection_type == 'polarization':
-            times = [self.dg_pulse_intervals[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'integrated_polarization':
-            times = [self.dg_pulse_intervals[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.dg_pulse_intervals[i] + arrival_times[i] for i in range(len(arrival_times))]
-
-        new = np.array(arrival_times)
-        new_pulse_sequence = np.argsort(new)
-        new_pulse_overlap_array = np.zeros((len(times),len(times)),dtype='bool')
-        for i in range(len(times)):
-            ti = times[i]
-            for j in range(i+1,len(times)):
-                tj = times[j]
-                if ti[0] >= tj[0] and ti[0] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
-                elif ti[-1] >= tj[0] and ti[-1] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
-        try:
-            logic_statement = (np.allclose(new_pulse_overlap_array,self.pulse_overlap_array)
-                and np.allclose(new_pulse_sequence,self.pulse_sequence))
-            # logic_statement = False
-            if logic_statement:
-                pass
-            else:
-                self.set_current_diagram_instructions(times)
-        except:
-            self.set_current_diagram_instructions(times)
+        diagram_instructions = self.get_wavefunction_diagrams(arrival_times)
+        self.current_instructions = diagram_instructions
+        if len(diagram_instructions) == 0:
+            print(arrival_times)
 
         t1 = time.time()
-        
-        if len(self.current_instructions) == 0:
-            print('No diagrams for arrival times ',arrival_times)
-            signal = 0
-        else:
-            instructions = self.current_instructions[0]
+        try:
+            instructions = diagram_instructions[0]
             signal = self.execute_diagram(instructions)
-            for instructions in self.current_instructions[1:]:
+            for instructions in diagram_instructions[1:]:
                 signal += self.execute_diagram(instructions)
-
+        except IndexError:
+            signal = 0
 
         t2 = time.time()
         self.automation_time += t1-t0
         self.diagram_to_signal_time += t2-t1
-
-        self.pulse_sequence = new_pulse_sequence
-        self.pulse_overlap_array = new_pulse_overlap_array
         return signal
 
     def calculate_diagrams(self,diagram_instructions,arrival_times):
@@ -410,11 +381,15 @@ be calculated on
             old_pulse_times = self.pulse_times
             for i in range(len(old_pulse_times)):
                 if old_pulse_times[i] != arrival_times[i]:
-                    self.remove_rhos_by_pulse_number(i)
+                    self.remove_psis_by_pulse_number(i)
         except AttributeError:
             pass
         
         self.pulse_times = arrival_times
+        if self.detection_type == 'integrated_polarization':
+            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
+        elif self.detection_type == 'fluorescence':
+            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
             
         self.current_instructions = diagram_instructions
         instructions = diagram_instructions[0]
@@ -423,51 +398,34 @@ be calculated on
             signal += self.execute_diagram(instructions)
         return signal
 
-    def polarization_detection_rho_to_signal(self,rho):
-        p_of_t = self.dipole_expectation(rho,ket_flag=True)
+    def polarization_detection_signal(self,bra_dict,ket_dict):
+        p_of_t = self.dipole_expectation(bra_dict,ket_dict,pulse_number = -1)
         return self.polarization_to_signal(p_of_t,local_oscillator_number=-1)
 
-    def integrated_polarization_detection_rho_to_signal(self,rho):    
-        p = self.integrated_dipole_expectation(rho,ket_flag=True)
+    def integrated_polarization_detection_rho_to_signal(self,bra_dict,ket_dict):
+        p = self.integrated_dipole_expectation(bra_dict,ket_dict,pulse_number=-1)
         return self.integrated_polarization_to_signal(p,local_oscillator_number=-1)
 
-    def fluorescence_detection_rho_to_signal(self,rho):
-        n_nonzero = rho['bool_mask']
-        L_size = self.eigenvalues[0].size
-        H_size = int(np.sqrt(L_size))
+    def fluorescence_detection_signal(self,bra_dict,ket_dict,*,time_index = -1):
+        """Calculate inner product given an input bra and ket dictionary
+            at a time given by the time index argument.  Default is -1, since
+            2DFS is concerned with the amplitude of arriving in the given manifold
+            after the pulse has finished interacting with the system."""
+        bra = np.conjugate(bra_dict['psi'][:,-1])
+        ket = ket_dict['psi'][:,-1]
+        return np.dot(bra,ket)
 
-        # move back to the basis the Liouvillian was written in
-        rho = self.eigenvectors['right'][:,n_nonzero].dot(rho['rho'][:,-1])
 
-        # reshape rho into a normal density matrix representation
-        rho = rho.reshape((H_size,H_size))
-
-        fluorescence_yield = np.array([0,1,1,self.f_yield])
-
-        signal = np.dot(np.diagonal(rho),fluorescence_yield)
-        
-        return signal
-
-    def interpolate_rho(self,t,rho,kind='cubic',left_fill=0):
-        """Interpolates density matrix at given inputs, and pads using 0 to the left
-            and rho[-1] to the right
-"""
-        left_fill = np.ones(rho.shape[0],dtype='complex')*left_fill
-        right_fill = rho[:,-1]
-        return sinterp1d(t,rho,fill_value = (left_fill,right_fill),assume_sorted=True,bounds_error=False,kind=kind)
-
-    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_rhos = True,
+    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_psis = True,
                     plot_fields = False):
         self.efield_times = times_list
-        self.dg_pulse_intervals = times_list
         self.efields = efields_list
         self.centers = centers_list
         self.set_phase_discrimination(phase_discrimination)
         self.dts = []
         self.efield_frequencies = []
-        self.heaviside_convolve_list = []
-        if reset_rhos:
-            self.rhos = dict()
+        if reset_psis:
+            self.psis = dict()
         for t in times_list:
             if t.size == 1:
                 dt = 1
@@ -479,10 +437,10 @@ be calculated on
             self.efield_frequencies.append(w)
             self.heaviside_convolve_list.append(HeavisideConvolve(t.size))
 
-        # Initialize unperturbed wavefunction
-        self.set_rho0()
-
         self.dt = self.dts[0]
+
+        # Initialize unperturbed wavefunction
+        self.set_psi0(self.initial_state)
 
         if self.detection_type == 'polarization' or 'integrated_polarization':
             try:
@@ -490,24 +448,21 @@ be calculated on
             except:
                 self.local_oscillator = copy.deepcopy(self.efields[-1])
 
-        # for i in range(len(self.efields)):
-        #     self.check_efield_resolution(i,plot_fields = plot_fields)
-                
+        # for field in self.efields:
+        #     if len(field) == 1:
+        #         # M = 1 is the impulsive limit
+        #         pass
+        #     else:
+        #         self.check_efield_resolution(field,plot_fields = plot_fields)
 
-    def check_efield_resolution(self,pulse_number,*,plot_fields = False):
-        efield = self.efields[pulse_number]
-        if len(efield) == 1:
-            return None
-        dt = self.dts[pulse_number]
-        efield_t = self.efield_times[pulse_number]
-        efield_w = fftshift(fftfreq(efield_t.size,d=dt))*2*np.pi
+    def check_efield_resolution(self,efield,*,plot_fields = False):
         efield_tail = np.max(np.abs([efield[0],efield[-1]]))
 
 
         if efield_tail > np.max(np.abs(efield))/100:
             warnings.warn('Consider using larger time interval, pulse does not decay to less than 1% of maximum value in time domain')
             
-        efield_fft = fftshift(fft(ifftshift(efield)))*dt
+        efield_fft = fftshift(fft(ifftshift(efield)))*self.dt
         efield_fft_tail = np.max(np.abs([efield_fft[0],efield_fft[-1]]))
         
         if efield_fft_tail > np.max(np.abs(efield_fft))/100:
@@ -515,9 +470,9 @@ be calculated on
 
         if plot_fields:
             fig, axes = plt.subplots(1,2)
-            l1,l2, = axes[0].plot(efield_t,np.real(efield),efield_t,np.imag(efield))
+            l1,l2, = axes[0].plot(self.efield_t,np.real(efield),self.efield_t,np.imag(efield))
             plt.legend([l1,l2],['Real','Imag'])
-            axes[1].plot(efield_w,np.real(efield_fft),efield_w,np.imag(efield_fft))
+            axes[1].plot(self.efield_w,np.real(efield_fft),self.efield_w,np.imag(efield_fft))
 
             axes[0].set_ylabel('Electric field Amp')
             axes[0].set_xlabel('Time ($\omega_0^{-1})$')
@@ -529,75 +484,83 @@ be calculated on
     def set_local_oscillator_phase(self,phase):
         self.efields[-1] = np.exp(1j*phase) * self.local_oscillator
 
-    def get_rho_site_basis(self,t,key,*,reshape=True):
-        rho_obj = self.rhos[key]
-        manifold_key = rho_obj.manifold_key
-        mask = rho_obj.bool_mask
-        
-        try:
-            size_L = self.eigenvalues['all_manifolds'].size
-            e = self.eigenvalues['all_manifolds'][mask]
-            ev = self.eigenvectors['all_manifolds'][:,mask]
-        except KeyError:
-            size_L = self.eigenvalues[manifold_key].size
-            e = self.eigenvalues[manifold_key][mask]
-            ev = self.eigenvectors[manifold_key][:,mask]
-        
-        size_H = int(np.sqrt(size_L))
-        rho = rho_obj(t)*np.exp(e[:,np.newaxis]*t[np.newaxis,:])
-        new_rho = ev.dot(rho)
-        if reshape:
-            new_rho = new_rho.reshape(size_H,size_H,rho.shape[-1])
-        return new_rho
+    def get_psi_eigen_basis(self,t,key):
+        psi_obj = self.psis[key]
+        mask = psi_obj.bool_mask
+        manifold_num = self.manifold_key_to_number(psi_obj.manifold_key)
+        e = self.eigenvalues[psi_obj.manifold_key][mask]
+        psi = psi_obj(t)*np.exp(-1j*e[:,np.newaxis]*t[np.newaxis,:])
+        full_size = 0
+        for i in range(len(self.eigenvalues)):
+            full_size += self.eigenvalues[i].size
+        total_psi = np.zeros(full_size,t.size)
+        start = 0
+        for i in range(len(self.eigenvalues)):
+            if i == manifold_num:
+                end = start + self.eigenvalues[i].size
+                total_psi[start:end,:] = new_psi
+            else:
+                start += self.eigenvalues[i].size
+        return total_psi
 
-    def get_rho_site_basis_by_order(self,t,order):
-        keys = self.rhos.keys()
+    def get_psi_site_basis(self,t,key):
+        psi_obj = self.psis[key]
+        mask = psi_obj.bool_mask
+        manifold_num = self.manifold_key_to_number(psi_obj.manifold_key)
+        e = self.eigenvalues[manifold_num][mask]
+        psi = psi_obj(t)*np.exp(-1j*e[:,np.newaxis]*t[np.newaxis,:])
+        ev = self.eigenvectors[manifold_num][:,mask]
+        new_psi = ev.dot(psi)
+        full_size = 0
+        manifold_sizes = []
+        for i in range(len(self.eigenvalues)):
+            manifold_sizes.append(self.eigenvectors[manifold_num].shape[0])
+            full_size += manifold_sizes[-1]
+        total_psi = np.zeros(full_size,t.size)
+        start = 0
+        for i in range(len(self.eigenvalues)):
+            if i == manifold_num:
+                end = start + manifold_sizes[i]
+                total_psi[start:end,:] = new_psi
+            else:
+                start += manifold_sizes[i]
+        return total_psi
+
+    def get_psi_site_basis_by_order(self,t,order):
+        keys = self.psis.keys()
         order_keys = []
         for key in keys:
-            if len(key) == 3*order:
+            if len(key) == 2*order:
                 order_keys.append(key)
-        rho_total = self.get_rho_site_basis(t,order_keys.pop(0))
+        psi_total = self.get_psi_site_basis(t,order_keys.pop(0))
         for key in order_keys:
-            rho_total += self.get_rho_site_basis(t,key)
+            psi_total += self.get_psi_site_basis(t,key)
 
-        return rho_total
+        return psi_total
 
-    def set_rho0(self):
+    def set_psi0(self,initial_state):
         """Creates the unperturbed wavefunction. This code does not 
             support initial states that are coherent super-positions of 
             eigenstates. To perform thermal averaging, recalculate spectra 
             for each initial state that contributes to the thermal ensemble.
+        Args:
+            initial_state (int): index for initial eigenstate in GSM
 """
+        # initial state must be interpreted given the fact that masking may have been done
         try:
-            ev = self.eigenvalues['all_manifolds']
-        except KeyError:
-            ev = self.eigenvalues['00']
+            trimmed_indices = np.where(self.trimming_masks[0])[0]
+            initial_state = np.where(trimmed_indices == initial_state)[0]
+        except AttributeError:
+            pass
 
         t = self.efield_times[0] # can be anything of the correct length
-        
-        initial_state = np.where(ev==0)[0]
-        rho0 = np.ones((1,t.size),dtype=complex)
-        bool_mask = np.zeros(ev.size,dtype='bool')
+
+        key = self.ordered_manifolds[0]
+        psi0 = np.ones((1,t.size),dtype=complex)*np.exp(-1j*self.eigenvalues[key][initial_state]*t)[np.newaxis,:]
+        bool_mask = np.zeros(self.eigenvalues[key].size,dtype='bool')
         bool_mask[initial_state] = True
-
-        
-
-        self.rho0 = rho_container(t,rho0,bool_mask,None,'00',interp_kind='zero',
-                                  interp_left_fill=1)
-
-    def set_rho0_manual(self,manifold_key,bool_mask,weights):
-        """
-"""
-        ev = self.eigenvalues[manifold_key][bool_mask]
-
-        t = self.efield_times[0] # can be anything of the correct length
-        
-        initial_state = np.where(ev==0)[0]
-        rho0 = np.ones((1,t.size),dtype=complex)*weights[:,np.newaxis]
-
-        
-
-        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,interp_kind='zero',
+ 
+        self.psi0 = psi_container(t,psi0,bool_mask,None,key,interp_kind='zero',
                                   interp_left_fill=1)
 
     def get_closest_index_and_value(self,value,array):
@@ -609,27 +572,6 @@ array index
         value = array[index]
         return index, value
 
-#     def load_eigenvalues(self):
-#         """Load in known eigenvalues. Must be stored as a numpy archive file,
-# with keys: GSM, SEM, and optionally DEM.  The eigenvalues for each manifold
-# must be 1d arrays, and are assumed to be ordered by increasing energy. The
-# energy difference between the lowest energy ground state and the lowest 
-# energy singly-excited state should be set to 0
-# """
-#         eigval_save_name = os.path.join(self.base_path,'eigenvalues.npz')
-#         with np.load(eigval_save_name) as eigval_archive:
-#             self.manifolds = eigval_archive.keys()
-#             self.eigenvalues = [eigval_archive[key] for key in self.manifolds]
-        
-#         ### store original eigenvalues for recentering purposes
-#         self.original_eigenvalues = copy.deepcopy(self.eigenvalues)
-
-#     def load_eigenvectors(self):
-#         """Only need the right eigenvectors"""
-#         eigvec_save_name = os.path.join(self.base_path,'right_eigenvectors.npz')
-#         with np.load(eigvec_save_name) as eigvec_archive:
-#             self.right_eigenvectors = {'right':eigvec_archive['all_manifolds']}
-
     def load_eigensystem(self):
         """Load in known eigenvalues. Must be stored as a numpy archive file,
 with keys: GSM, SEM, and optionally DEM.  The eigenvalues for each manifold
@@ -638,43 +580,41 @@ energy difference between the lowest energy ground state and the lowest
 energy singly-excited state should be set to 0
 """
         eigval_save_name = os.path.join(self.base_path,'eigenvalues.npz')
-        eigvec_save_name = os.path.join(self.base_path,'right_eigenvectors.npz')
+        eigvec_save_name = os.path.join(self.base_path,'eigenvectors.npz')
         with np.load(eigval_save_name) as eigval_archive:
-            self.manifolds = eigval_archive.keys()
+            self.manifolds = list(eigval_archive.keys())
             self.eigenvalues = {key:eigval_archive[key] for key in self.manifolds}
         with np.load(eigvec_save_name) as eigvec_archive:
             self.eigenvectors = {key:eigvec_archive[key] for key in self.manifolds}
+
+        if '0' in self.manifolds:
+            self.ordered_manifolds = [str(i) for i in range(len(self.manifolds))]
+        else:
+            self.ordered_manifolds = ['GSM','SEM','DEM','TEM','QEM']
         
         ### store original eigenvalues for recentering purposes
         self.original_eigenvalues = copy.deepcopy(self.eigenvalues)
 
-    # def load_mu_by_manifold(self):
-    #     file_name = os.path.join(self.base_path,'mu_by_manifold.npz')
-    #     self.mu_by_manifold = dict()
-    #     self.boolean_mu_by_manifold = dict()
-    #     with np.load(file_name) as mu_archive:
-    #         for key in mu_archive.keys():
-    #             self.mu_by_manifold[key] = mu_archive[key]
-    #             self.boolean_mu_by_manifold[key] = np.ones(mu_archive[key].shape[:2],dtype='bool')
-
     def load_mu(self):
         """Load the precalculated dipole overlaps.  The dipole operator must
             be stored as a .npz file, and must contain at least one array, each with three 
-            indices: (new manifold eigenfunction, old manifold eigenfunction, 
-            cartesian coordinate)."""
+            indices: (upper manifold eigenfunction, lower manifold eigenfunction, 
+            cartesian coordinate).  So far this code supports up to three manifolds, and
+            therefore up to two dipole operators (connecting between manifolds)"""
         file_name = os.path.join(self.base_path,'mu.npz')
         file_name_pruned = os.path.join(self.base_path,'mu_pruned.npz')
         file_name_bool = os.path.join(self.base_path,'mu_boolean.npz')
+
         try:
-            file_name = file_name_pruned
             mu_boolean_archive = np.load(file_name_bool)
             # self.mu_boolean = {'ket':mu_boolean_archive['ket'],'bra':mu_boolean_archive['bra']}
             with np.load(file_name_bool) as mu_boolean_archive:
                 self.mu_boolean = {key:mu_boolean_archive[key] for key in mu_boolean_archive.keys()}
             pruned = True
+            file_name = file_name_pruned
         except FileNotFoundError:
             pruned = False
-        # self.mu = {'ket':mu_archive['ket'],'bra':mu_archive['bra']}
+
         with np.load(file_name) as mu_archive:
             self.mu = {key:mu_archive[key] for key in mu_archive.keys()}
         if pruned == False:
@@ -684,7 +624,7 @@ energy singly-excited state should be set to 0
         
     ### Setting the electric field to be used
 
-    def set_polarization_sequence(self,polarization_list,*,reset_rhos=True):
+    def set_polarization_sequence(self,polarization_list,*,reset_psis=True):
         """Sets the sequences used for either parallel or crossed pump and probe
         
         Args:
@@ -699,8 +639,8 @@ energy singly-excited state should be set to 0
         pol_options = {'x':x,'y':y,'z':z}
 
         self.polarization_sequence = [pol_options[pol] for pol in polarization_list]
-        if reset_rhos:
-            self.rhos = dict()
+        if reset_psis:
+            self.psis = dict()
 
 
     ### Tools for recursively calculating perturbed wavepackets using TDPT
@@ -718,10 +658,7 @@ energy singly-excited state should be set to 0
             mu = self.mu[key]
             boolean_matrix = self.mu_boolean[key]
         except KeyError:
-            if ket_flag:
-                key = 'ket'
-            else:
-                key = 'bra'
+            key = 'ket'
             if up_flag:
                 key += '_up'
             else:
@@ -738,44 +675,14 @@ energy singly-excited state should be set to 0
         else:
             overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
 
+        if not up_flag:
+            overlap_matrix = overlap_matrix.T
+            boolean_matrix = boolean_matrix.T
+
         t1 = time.time()
         self.dipole_time += t1-t0
 
         return boolean_matrix, overlap_matrix
-
-#     def electric_field_mask(self,pulse_number,conjugate_flag=False):
-#         """This method determines which molecular transitions will be 
-# supported by the electric field.  We assume that the electric field has
-# 0 amplitude outside the minimum and maximum frequency immplied by the 
-# choice of dt and num_conv_points.  Otherwise we will inadvertently 
-# alias transitions onto nonzero electric field amplitudes.
-# """
-#         efield_t = self.efield_times[pulse_number]
-#         efield_w = self.efield_frequencies[pulse_number]
-#         if conjugate_flag:
-#             center = -self.centers[pulse_number]
-#         else:
-#             center = self.centers[pulse_number]
-        
-#         eig = self.eigenvalues[0]
-#         # imag part corresponds to the energetic transitions
-#         diff = np.imag(eig[:,np.newaxis] - eig[np.newaxis,:])
-        
-#         if efield_t.size == 1:
-#             mask = np.ones(diff.shape,dtype='bool')
-#             # try:
-#             #     inds_allowed = np.where((diff + center > -self.RWA_width/2) & (diff + center < self.RWA_width/2))
-#             #     mask = np.zeros(diff.shape,dtype='bool')
-#             #     mask[inds_allowed] = 1
-#             # except AttributeError:
-#             #     raise Exception('When working with impulsive pulses you must set object attribute RWA_width')
-#         else:
-#             # The only transitions allowed by the electric field shape are
-#             inds_allowed = np.where((diff + center > efield_w[0]) & (diff + center < efield_w[-1]))
-#             mask = np.zeros(diff.shape,dtype='bool')
-#             mask[inds_allowed] = 1
-
-#         return mask
 
     def electric_field_mask(self,pulse_number,key,conjugate_flag=False):
         """This method determines which molecular transitions will be 
@@ -784,7 +691,10 @@ supported by the electric field.  We assume that the electric field has
 choice of dt and num_conv_points.  Otherwise we will inadvertently 
 alias transitions onto nonzero electric field amplitudes.
 """
-        starting_key, ending_key = key.split('_to_')
+        if conjugate_flag:
+            ending_key, starting_key = key.split('_to_')
+        else:
+            starting_key, ending_key = key.split('_to_')
         efield_t = self.efield_times[pulse_number]
         efield_w = self.efield_frequencies[pulse_number]
         if conjugate_flag:
@@ -797,14 +707,14 @@ alias transitions onto nonzero electric field amplitudes.
         except KeyError:
             eig_starting = self.eigenvalues[starting_key]
             eig_ending = self.eigenvalues[ending_key]
-        # imag part corresponds to the energetic transitions
-        diff = np.imag(eig_ending[:,np.newaxis] - eig_starting[np.newaxis,:])
+        
+        diff = eig_ending[:,np.newaxis] - eig_starting[np.newaxis,:]
         
         if efield_t.size == 1:
             mask = np.ones(diff.shape,dtype='bool')
         else:
             # The only transitions allowed by the electric field shape are
-            inds_allowed = np.where((diff + center > efield_w[0]) & (diff + center < efield_w[-1]))
+            inds_allowed = np.where((diff - center > efield_w[0]) & (diff - center < efield_w[-1]))
             mask = np.zeros(diff.shape,dtype='bool')
             mask[inds_allowed] = 1
 
@@ -842,78 +752,64 @@ alias transitions onto nonzero electric field amplitudes.
 
         return overlap_matrix, n_nonzero
 
-    def manifold_key_to_array(self,key):
-        """Key must be a string of exactly 2 integers, the first describing
-            the ket manifold, the second the bra manifold.  If the density 
-            matrix is represented in the full space, rather than being divided
-            into manifolds, the first integer reperesents the total number of
-            excitations to the ket side, and the second integers represents 
-            the sum of all excitations to the bra side."""
-        if len(key) != 2:
-            raise Exception('manifold key must be a string of exactly two intgers')
-        return np.array([int(char) for char in key],dtype=int)
+    def manifold_key_to_number(self,key):
+        num = self.ordered_manifolds.index(key)
+        return num
+
+    def manifold_number_to_key(self,num):
+        key = self.ordered_manifolds[num]
+        return key
     
-    def manifold_array_to_key(self,manifold):
-        """Inverse of self.manifold_key_to_array"""
-        if manifold.size != 2 or manifold.dtype != int:
-            raise Exception('manifold array must contain exactly 2 integer') 
-        return str(manifold[0]) + str(manifold[1])
-    
-    def next_order(self,rho_in,*,ket_flag=True,up_flag=True,
+    def next_order(self,psi_in,*,up_flag=True,
                    new_manifold_mask = None,pulse_number = 0):
-        """This function connects rho_p to rho_pj^(*) using a DFT convolution algorithm.
+        """This function connects psi_p to psi_pj^(*) using a DFT convolution algorithm.
 
         Args:
-            rho_in (rho_container): input density matrix
-            pulse_number (int): index of optical pulse (0,1,2,...)
+            psi_in (psi_container): input density matrix
+            pulse_number (int): index of optical pulse (0,1,2,...) can also be set to
+                'impulsive'
             new_manifold_mask (np.ndarray): optional - define the states to be considered 
                 in the next manifold
         
         Return:
-            rho_dict (rho_container): next-order density matrix
+            psi_dict (psi_container): next-order wavefunction
 """
         pulse_time = self.pulse_times[pulse_number]
         t = self.efield_times[pulse_number] + pulse_time
-        dt = self.dts[pulse_number]
-        old_manifold_key = rho_in.manifold_key
+        old_manifold_key = psi_in.manifold_key
         if up_flag:
             change = 1
-        else:
-            change = -1
-        if ket_flag:
-            manifold_change = np.array([change,0],dtype=int)
-        else:
-            manifold_change = np.array([0,change],dtype=int)
-        old_manifold = self.manifold_key_to_array(old_manifold_key)
-        new_manifold = old_manifold + manifold_change
-        new_manifold_key = self.manifold_array_to_key(new_manifold)
-        mu_key = old_manifold_key + '_to_' + new_manifold_key
-        
-        if ket_flag == up_flag:
-            # Rotating term excites the ket and de-excites the bra
             conjugate_flag = False
         else:
-            # Counter-rotating term
+            change = -1
             conjugate_flag = True
+        old_manifold = self.manifold_key_to_number(old_manifold_key)
+        new_manifold = old_manifold + change
+        new_manifold_key = self.manifold_number_to_key(new_manifold)
+        if up_flag:
+            mu_key = old_manifold_key + '_to_' + new_manifold_key
+        else:
+            mu_key = new_manifold_key + '_to_' + old_manifold_key
 
         if conjugate_flag:
-            center = -self.centers[pulse_number]
+            center = - self.centers[pulse_number]
         else:
             center = self.centers[pulse_number]
         
-        m_nonzero = rho_in.bool_mask
+        m_nonzero = psi_in.bool_mask
         try:
             ev1 = self.eigenvalues['all_manifolds']
             ev2 = self.eigenvalues['all_manifolds']
         except KeyError:
             ev1 = self.eigenvalues[old_manifold_key]
             ev2 = self.eigenvalues[new_manifold_key]
-
-        exp_factor1 = np.exp( (ev1[m_nonzero,np.newaxis] - 1j*center)*t[np.newaxis,:])
+            
+        exp_factor_starting = np.exp( -1j*(ev1[m_nonzero,np.newaxis])*t[np.newaxis,:])
+            
         
-        rho = rho_in(t) * exp_factor1
+        psi = psi_in(t) * exp_factor_starting
         
-        boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=ket_flag,up_flag=up_flag)
+        boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,up_flag=up_flag)
 
         e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
         boolean_matrix = boolean_matrix * e_mask
@@ -923,149 +819,103 @@ alias transitions onto nonzero electric field amplitudes.
                                                                 next_manifold_mask = new_manifold_mask)
         
         t0 = time.time()
-        rho = overlap_matrix.dot(rho)
+        psi = overlap_matrix.dot(psi)
         
         t1 = time.time()
         self.next_order_expectation_time += t1-t0
 
-        exp_factor2 = np.exp(-ev2[n_nonzero,np.newaxis]*t[np.newaxis,:])
+        exp_factor_ending = np.exp(1j*ev2[n_nonzero,np.newaxis]*t[np.newaxis,:])
 
-        rho *= exp_factor2
+        psi = psi*exp_factor_ending
+
+        psi = psi * np.exp(-1j*center*t)
 
         t0 = time.time()
 
         M = self.efield_times[pulse_number].size
 
         fft_convolve_fun = self.heaviside_convolve_list[pulse_number].fft_convolve2
-        # fft_convolve_fun = self.fft_convolve2
 
         if M == 1:
-            rho *= self.efields[pulse_number]
+            psi = psi * self.efields[pulse_number]
         else:
             if conjugate_flag:
                 efield = np.conjugate(self.efields[pulse_number])
             else:
                 efield = self.efields[pulse_number]
-            rho = fft_convolve_fun(rho * efield[np.newaxis,:],d=dt)
+            psi = fft_convolve_fun(psi * efield[np.newaxis,:],d=self.dt)
 
         t1 = time.time()
         self.convolution_time += t1-t0
 
         # i/hbar Straight from perturbation theory
-        if ket_flag:
-            rho *= 1j
-        else:
-            rho *= -1j
+        psi *= 1j
 
-        rho_out = rho_container(t,rho,n_nonzero,pulse_number,new_manifold_key)
+
+        psi_out = psi_container(t,psi,n_nonzero,pulse_number,new_manifold_key)
     
-        return rho_out
+        return psi_out
             
-    def ket_up(self,rho_in,*,new_manifold_mask = None,pulse_number = 0):
+    def up(self,psi_in,*,new_manifold_mask = None,pulse_number = 0):
         """This method connects psi_p to psi_pj where the next order psi
             is one manifold above the current manifold.
 
         Args:
-            rho_in (rho_container): input density matrix
-            pulse_number (int): index of optical pulse (0,1,2,...) 
+            psi_in (psi_container): input density matrix
+            pulse_number (int): index of optical pulse (0,1,2,...) can also be set to
+                'impulsive'
             new_manifold_mask (np.ndarray): optional - define the states to be considered 
                 in the next manifold
 
         Returns:
-            (rho_container): output from method next_order
+            (psi_container): output from method next_order
 """
 
-        return self.next_order(rho_in,ket_flag=True,up_flag=True,
+        return self.next_order(psi_in,up_flag=True,
                                new_manifold_mask = new_manifold_mask,
                                pulse_number = pulse_number)
 
-    def ket_down(self,rho_in,*,new_manifold_mask = None,pulse_number = 0):
+    def down(self,psi_in,*,new_manifold_mask = None,pulse_number = 0):
         """This method connects psi_p to psi_pj where the next order psi
             is one manifold above the current manifold.
 
         Args:
-            rho_in (rho_container): input density matrix
-            pulse_number (int): index of optical pulse (0,1,2,...) 
+            psi_in (psi_container): input density matrix
+            pulse_number (int): index of optical pulse (0,1,2,...) can also be set to
+                'impulsive'
             new_manifold_mask (np.ndarray): optional - define the states to be considered 
                 in the next manifold
 
         Returns:
-            (rho_container): output from method next_order
+            (psi_container): output from method next_order
 """
 
-        return self.next_order(rho_in,ket_flag=True,up_flag=False,
-                               new_manifold_mask = new_manifold_mask,
-                               pulse_number = pulse_number)
-
-    def bra_up(self,rho_in,*,new_manifold_mask = None,pulse_number = 0):
-        """This method connects psi_p to psi_pj where the next order psi
-            is one manifold above the current manifold.
-
-        Args:
-            rho_in (rho_container): input density matrix
-            pulse_number (int): index of optical pulse (0,1,2,...)
-            new_manifold_mask (np.ndarray): optional - define the states to be considered 
-                in the next manifold
-
-        Returns:
-            (rho_container): output from method next_order
-"""
-
-        return self.next_order(rho_in,ket_flag=False,up_flag=True,
-                               new_manifold_mask = new_manifold_mask,
-                               pulse_number = pulse_number)
-
-    def bra_down(self,rho_in,*,new_manifold_mask = None,pulse_number = 0):
-        """This method connects psi_p to psi_pj where the next order psi
-            is one manifold above the current manifold.
-
-        Args:
-            rho_in (rho_container): input density matrix
-            pulse_number (int): index of optical pulse (0,1,2,...)
-            new_manifold_mask (np.ndarray): optional - define the states to be considered 
-                in the next manifold
-
-        Returns:
-            (rho_container): output from method next_order
-"""
-
-        return self.next_order(rho_in,ket_flag=False,up_flag=False,
+        return self.next_order(psi_in,up_flag=False,
                                new_manifold_mask = new_manifold_mask,
                                pulse_number = pulse_number)
 
     ### Tools for taking the expectation value of the dipole operator with perturbed wavepackets
     
-    def dipole_down(self,rho_dict,*,new_manifold_mask = None,pulse_number = -1,
-                    ket_flag=True):
+    def dipole_down(self,psi_dict,*,new_manifold_mask = None,pulse_number = -1):
         """This method is similar to the method down, but does not involve 
             the electric field shape or convolutions. It is the action of the 
             dipole operator on the ket-side without TDPT effects.  It also includes
             the dot product of the final electric field polarization vector."""
-        old_manifold_key = rho_dict['manifold_key']
+        old_manifold_key = psi_dict['manifold_key']
+        
         change = -1
-        if ket_flag:
-            manifold_change = np.array([change,0])
-        else:
-            manifold_change = np.array([0,change])
 
-        old_manifold = self.manifold_key_to_array(old_manifold_key)
-        new_manifold = old_manifold + manifold_change
-        new_manifold_key = self.manifold_array_to_key(new_manifold)
-        mu_key = old_manifold_key + '_to_' + new_manifold_key
-        if ket_flag:
-            center = - self.centers[pulse_number]
-            conjugate_flag = True
-            manifold_change = np.array([change,0],dtype=int)
-        else:
-            center = self.centers[pulse_number]
-            conjugate_flag = False
-            manifold_change = np.array([0,change],dtype=int)
+        old_manifold = self.manifold_key_to_number(old_manifold_key)
+        new_manifold = old_manifold + change
+        new_manifold_key = self.manifold_number_to_key(new_manifold)
+        mu_key = new_manifold_key + '_to_' + old_manifold_key
+        conjugate_flag = True
 
-        rho_in = rho_dict['rho']
+        psi_in = psi_dict['psi']
         
-        m_nonzero = rho_dict['bool_mask']
+        m_nonzero = psi_dict['bool_mask']
         
-        boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=True,up_flag=False)
+        boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,up_flag=False)
 
         e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
         boolean_matrix = boolean_matrix * e_mask
@@ -1074,54 +924,31 @@ alias transitions onto nonzero electric field amplitudes.
         overlap_matrix, n_nonzero = self.mask_dipole_matrix(boolean_matrix,overlap_matrix,m_nonzero,
                                                                 next_manifold_mask = new_manifold_mask)
         t0 = time.time()
-        rho = overlap_matrix.dot(rho_in)
+        psi = overlap_matrix.dot(psi_in)
                 
         t1 = time.time()
 
-        try:
-            L_size = self.eigenvalues['all_manifolds'].size
-        except KeyError:
-            L_size = self.eigenvalues[new_manifold_key].size
-        H_size = int(np.sqrt(L_size))
+        new_dict = {'bool_mask':n_nonzero,'manifold_key':new_manifold_key,'psi':psi}
 
-        # move back to the basis the Liouvillian was written in
-        try:
-            rho = self.eigenvectors['all_manifolds'][:,n_nonzero].dot(rho)
-        except KeyError:
-            rho = self.eigenvectors[new_manifold_key][:,n_nonzero].dot(rho)
-
-        # reshape rho into a normal density matrix representation
-        rho = rho.reshape((H_size,H_size,rho.shape[-1]))
-
-        polarization_field = np.einsum('iij',rho)
-
-        return polarization_field
+        return new_dict
 
     def set_undersample_factor(self,frequency_resolution):
         """dt is set by the pulse. However, the system dynamics may not require such a 
             small dt.  Therefore, this allows the user to set a requested frequency
-            resolution for any spectrally resolved signals.  This assumes that the 
-            undersampling is defined with respect to the last pulse, which is assumed
-            to be the local oscillator"""
+            resolution for any spectrally resolved signals."""
         # f = pi/dt
         dt = np.pi/frequency_resolution
-        u = int(np.floor(dt/self.dts[-1]))
+        u = int(np.floor(dt/self.dt))
         self.undersample_factor = max(u,1)
-        
-    def dipole_expectation(self,rho_in,*,ket_flag=True):
-        """Computes the expectation value of the dipole operator"""
-        t0 = time.time()
 
-        pulse_number = -1
-        
+    def dipole_expectation(self,bra_in,ket_in,*,pulse_number = -1):
+        """Computes the expectation value of the two wavefunctions with respect 
+            to the dipole operator.  Both wavefunctions are taken to be kets, and the one 
+            named 'bra' is converted to a bra by taking the complex conjugate."""
+        t0 = time.time()
         pulse_time = self.pulse_times[pulse_number]
         dt = self.dts[pulse_number]
         efield_t = self.efield_times[pulse_number]
-
-        if ket_flag:
-            center = - self.centers[pulse_number]
-        else:
-            center = self.centers[pulse_number]
 
         M = efield_t.size
 
@@ -1142,34 +969,52 @@ alias transitions onto nonzero electric field amplitudes.
         t1 = self.t[t1_slice] + pulse_time
         t2 = self.t[t2_slice] + pulse_time
 
-        rho1 = rho_in(t1)
-        rho2 = rho_in(t2)
+        manifold1_key = bra_in.manifold_key
+        manifold2_key = ket_in.manifold_key
 
-        rho_nonzero = rho_in.bool_mask
-        try:
-            ev = self.eigenvalues['all_manifolds'][rho_nonzero]
-        except KeyError:
-            ev = self.eigenvalues[rho_in.manifold_key][rho_nonzero]
+        manifold1_num = self.manifold_key_to_number(manifold1_key)
+        manifold2_num = self.manifold_key_to_number(manifold2_key)
 
-        rho1 *= np.exp((ev[:,np.newaxis] - 1j*center)* t1[np.newaxis,:])
+        bra_nonzero = bra_in.bool_mask
+        ket_nonzero = ket_in.bool_mask
 
-        rho2 *= np.exp((ev[:,np.newaxis] - 1j*center) * t2[np.newaxis,:])
+        bra_ev = self.eigenvalues[manifold1_key][bra_nonzero]
+        ket_ev = self.eigenvalues[manifold2_key][ket_nonzero]
+
+        e_center = -self.centers[pulse_number]
+
+        bra_in1 = bra_in(t1) * np.exp(-1j*bra_ev[:,np.newaxis]*t1[np.newaxis,:])
+        bra_in2 = bra_in(t2) * np.exp(-1j*bra_ev[:,np.newaxis]*t2[np.newaxis,:])
+        ket_in1 = ket_in(t1) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t1[np.newaxis,:])
+        ket_in2 = ket_in(t2) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t2[np.newaxis,:])
 
         # _u is an abbreviation for undersampled
         t_u = np.hstack((t1,t2))
-        rho_u = np.hstack((rho1,rho2))
+        bra_u = np.hstack((bra_in1,bra_in2))
+        ket_u = np.hstack((ket_in1,ket_in2))
         
-        tb = time.time()
-        self.slicing_time += tb-t0
+        bra_dict = {'bool_mask':bra_nonzero,'manifold_key':manifold1_key,'psi':bra_u}
+        ket_dict = {'bool_mask':ket_nonzero,'manifold_key':manifold2_key,'psi':ket_u}
 
-        rho_dict = {'bool_mask':rho_nonzero,'rho':rho_u,'manifold_key':rho_in.manifold_key}
-
+        if np.abs(manifold1_num - manifold2_num) != 1:
+            warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
+            return None
         t0 = time.time()
-        exp_val_u = self.dipole_down(rho_dict,pulse_number = pulse_number,
-                                     ket_flag = ket_flag)
+        if manifold1_num > manifold2_num:
+            bra_new_mask = ket_dict['bool_mask']
+            bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
+                                        pulse_number = pulse_number)
+        else:
+            ket_new_mask = bra_dict['bool_mask']
+            ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
+                                        pulse_number = pulse_number)
         
-        tb = time.time()
-        self.expectation_time += tb-t0
+        bra_u = bra_dict['psi']
+        ket_u = ket_dict['psi']
+
+        exp_val_u = np.sum(np.conjugate(bra_u) * ket_u,axis=0)
+        t1 = time.time()
+        self.expectation_time += t1-t0
 
         t0 = time.time()
 
@@ -1191,75 +1036,61 @@ alias transitions onto nonzero electric field amplitudes.
         ret_val[pulse_start_ind:] = exp_val
         return ret_val
 
-    def integrated_dipole_expectation(self,rho_in,*,ket_flag=True):
-        """Computes the expectation value of the dipole operator"""
-        
-        pulse_number = -1
-        
-        pulse_time = self.pulse_times[pulse_number]
-        t = pulse_time + self.efield_times[pulse_number]
-
-        if ket_flag:
-            center = - self.centers[pulse_number]
-        else:
-            center = self.centers[pulse_number]
-
-        rho = rho_in(t)
-
-        rho_nonzero = rho_in.bool_mask
-        try:
-            ev = self.eigenvalues['all_manifolds'][rho_nonzero]
-        except KeyError:
-            ev = self.eigenvalues[rho_in.manifold_key][rho_nonzero]
-
-        rho = rho * np.exp((ev[:,np.newaxis] - 1j*center)*t)
-
-        rho_dict = {'bool_mask':rho_nonzero,'rho':rho,'manifold_key':rho_in.manifold_key}
-
+    def integrated_dipole_expectation(self,bra_in,ket_in,*,pulse_number = -1):
+        """Computes the expectation value of the two wavefunctions with respect 
+            to the dipole operator.  Both wavefunctions are taken to be kets, and the one 
+            named 'bra' is converted to a bra by taking the complex conjugate."""
         t0 = time.time()
-        exp_val = self.dipole_down(rho_dict,pulse_number = pulse_number,
-                                     ket_flag = ket_flag)
+        pulse_time = self.pulse_times[pulse_number]
+
+        efield_t = self.efield_times[pulse_number]
         
-        tb = time.time()
-        self.expectation_time += tb-t0
+        # The signal is zero before the final pulse arrives, and persists
+        # until it decays. Therefore we avoid taking the sum at times
+        # where the signal is zero.
+        t = efield_t + pulse_time
 
-        return exp_val
+        manifold1_key = bra_in.manifold_key
+        manifold2_key = ket_in.manifold_key
 
-    def get_local_oscillator(self):
-        local_oscillator_number = -1
-        efield_t = self.efield_times[local_oscillator_number]
-        efield = self.efields[local_oscillator_number]
+        manifold1_num = self.manifold_key_to_number(manifold1_key)
+        manifold2_num = self.manifold_key_to_number(manifold2_key)
 
-        if efield_t.size == 1:
-            # Impulsive limit: delta in time is flat in frequency
-            efield_ft = np.ones(self.w.size)*efield
-            return efield_ft
+        bra_nonzero = bra_in.bool_mask
+        ket_nonzero = ket_in.bool_mask
+
+        bra_ev = self.eigenvalues[manifold1_key][bra_nonzero]
+        ket_ev = self.eigenvalues[manifold2_key][ket_nonzero]
+
+        e_center = -self.centers[pulse_number]
+
+        bra_in = bra_in(t) * np.exp(-1j*bra_ev[:,np.newaxis]*t[np.newaxis,:])
+        ket_in = ket_in(t1) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t[np.newaxis,:])
         
-        e_dt = efield_t[1] - efield_t[0]
-        dt = self.t[1] - self.t[0]
-            
-        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
-            full_efield = np.zeros(self.t.size,dtype='complex')
+        bra_dict = {'bool_mask':bra_nonzero,'manifold_key':manifold1_key,'psi':bra_in}
+        ket_dict = {'bool_mask':ket_nonzero,'manifold_key':manifold2_key,'psi':ket_in}
 
-            # the local oscillator sets the "zero" on the clock
-            pulse_time_ind = np.argmin(np.abs(self.t))
-
-            pulse_start_ind = pulse_time_ind - efield_t.size//2
-            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
-
-            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-            
-            full_efield[t_slice] = efield
-            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+        if np.abs(manifold1_num - manifold2_num) != 1:
+            warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
+            return None
+        t0 = time.time()
+        if manifold1_num > manifold2_num:
+            bra_new_mask = ket_dict['bool_mask']
+            bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
+                                        pulse_number = pulse_number)
         else:
-            efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
-            efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
-            fill_value = (efield_ft[0],efield_ft[-1])
-            f = sinterp1d(efield_w,efield_ft,fill_value = fill_value,
-                          bounds_error=False,kind='quadratic')
-            efield_ft = f(self.w)
+            ket_new_mask = bra_dict['bool_mask']
+            ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
+                                        pulse_number = pulse_number)
+        
+        bra_in = bra_dict['psi']
+        ket_in = ket_dict['psi']
 
-        return efield_ft
+        exp_val = np.sum(np.conjugate(bra_in) * ket_in,axis=0)
+        t1 = time.time()
+        self.expectation_time += t1-t0
+        
+        return exp_val
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
@@ -1271,8 +1102,25 @@ alias transitions onto nonzero electric field amplitudes.
         t = self.t[undersample_slice]
         dt = t[1] - t[0]
         pulse_time = self.pulse_times[local_oscillator_number]
+        efield_t = self.efield_times[local_oscillator_number]
 
-        efield = self.get_local_oscillator()
+        center = - self.centers[local_oscillator_number]
+        P_of_t = P_of_t# * np.exp(-1j*center*t)
+        
+        pulse_time_ind = np.argmin(np.abs(self.t))
+        efield = np.zeros(self.t.size,dtype='complex')
+
+        if efield_t.size == 1:
+            # Impulsive limit: delta in time is flat in frequency
+            efield = np.ones(self.w.size)*self.efields[local_oscillator_number]
+        else:
+            pulse_start_ind = pulse_time_ind - efield_t.size//2
+            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
+
+            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
+            
+            efield[t_slice] = self.efields[local_oscillator_number]
+            efield = fftshift(ifft(ifftshift(efield)))*efield.size*dt
 
         halfway = self.w.size//2
         pm = self.w.size//(2*undersample_factor)
@@ -1308,27 +1156,3 @@ alias transitions onto nonzero electric field amplitudes.
                                  *np.exp(-self.t21_array**2/(2*sigma**2))[:,np.newaxis,np.newaxis])
         sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
         self.signal = sig_tau_w
-
-    def save(self,file_name,pulse_delay_names,*,use_base_path=True):
-        if use_base_path:
-            file_name = os.path.join(self.base_path,file_name)
-        save_dict = {}
-        for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
-            save_dict[name] = delays
-        if self.detection_type == 'polarization':
-            save_dict['wt'] = self.w
-        save_dict['signal'] = self.signal
-        save_dict['signal_calculation_time'] = self.calculation_time
-        np.savez(file_name,**save_dict)
-
-    def load(self,file_name,pulse_delay_names,*,use_base_path=True):
-        if use_base_path:
-            file_name = os.path.join(self.base_path,file_name)
-        arch = np.load(file_name)
-        self.all_pulse_delays = []
-        for name in pulse_delay_names:
-            self.all_pulse_delays.append(arch[name])
-        if self.detection_type == 'polarization':
-            self.w = arch['wt']
-        self.signal = arch['signal']
-        self.calculation_time = arch['signal_calculation_time']
