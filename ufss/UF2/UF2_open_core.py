@@ -564,10 +564,9 @@ be calculated on
         return rho_total
 
     def set_rho0(self):
-        """Creates the unperturbed wavefunction. This code does not 
-            support initial states that are coherent super-positions of 
-            eigenstates. To perform thermal averaging, recalculate spectra 
-            for each initial state that contributes to the thermal ensemble.
+        """Creates the unperturbed density matarix by finding the 0 
+            eigenvalue of the ground-state manifold, which should correspond
+            to a thermal distribution
 """
         try:
             ev = self.eigenvalues['all_manifolds']
@@ -576,10 +575,14 @@ be calculated on
 
         t = self.efield_times[0] # can be anything of the correct length
         
-        initial_state = np.where(ev==0)[0]
+        initial_state = np.where(np.isclose(ev,0,atol=1E-12))[0]
         rho0 = np.ones((1,t.size),dtype=complex)
         bool_mask = np.zeros(ev.size,dtype='bool')
         bool_mask[initial_state] = True
+
+        if bool_mask.sum() != 1:
+            print('Could not automatically determine the initial thermal state. User must specify the initial condition, rho^(0), manually')
+            return None
 
         
 
