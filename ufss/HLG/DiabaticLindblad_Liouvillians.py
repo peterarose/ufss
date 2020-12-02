@@ -1172,35 +1172,35 @@ gamma)"""
 
     def set_bath_coupling(self):
         try:
-            self.site_to_site_relaxation_gamma = self.params['site_to_site_relaxation_gamma']
+            self.site_to_site_relaxation_gamma = self.params['bath']['site_to_site_relaxation_gamma']
         except KeyError:
             pass
 
         try:
-            self.site_to_site_dephasing_gamma = self.params['site_to_site_dephasing_gamma']
-        except KeyError:
-            pass
-
-        
-        try:
-            self.optical_dephasing_gamma = self.params['optical_dephasing_gamma']
-        except KeyError:
-            pass
-
-        try:
-            self.optical_relaxation_gamma = self.params['optical_relaxation_gamma']
+            self.site_to_site_dephasing_gamma = self.params['bath']['site_to_site_dephasing_gamma']
         except KeyError:
             pass
 
         
         try:
-            self.vibrational_gamma = self.params['vibrational_gamma']
+            self.optical_dephasing_gamma = self.params['bath']['optical_dephasing_gamma']
+        except KeyError:
+            pass
+
+        try:
+            self.optical_relaxation_gamma = self.params['bath']['optical_relaxation_gamma']
+        except KeyError:
+            pass
+
+        
+        try:
+            self.vibrational_gamma = self.params['bath']['vibrational_gamma']
         except KeyError:
             self.vibrational_gamma = 0.1
 
             
         try:
-            self.kT = self.params['kT']
+            self.kT = self.params['bath']['kT']
         except KeyError:
             pass
 
