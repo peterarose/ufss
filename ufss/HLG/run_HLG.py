@@ -1,5 +1,5 @@
 import os
-from ufss.HLG import PolymerVibrations,DiagonalizeHamiltonian,RedfieldConstructor,DiagonalizeLiouvillian,OpenPolymerVibrations
+from ufss.HLG import PolymerVibrations,DiagonalizeHamiltonian,RedfieldConstructor,DiagonalizeLiouvillian,OpenPolymerVibrations,convert
 
 class run:
 
