@@ -1,5 +1,5 @@
 import os
-from ufss.HLG import PolymerVibrations,DiagonalizeHamiltonian,RedfieldConstructor,DiagonalizeLiouvillian,OpenPolymerVibrations,convert
+from ufss.HLG import PolymerVibrations,DiagonalizeHamiltonian,RedfieldConstructor,SecularRedfieldConstructor,DiagonalizeLiouvillian,OpenPolymerVibrations,convert
 
 class run:
 
@@ -21,6 +21,7 @@ class run:
             self.open = True
             if 'site_bath' in pv.params['bath'].keys():
                 self.Redfield = True
+                self.secular = pv.params['bath']['secular']
             else:
                 self.Redfield = False
                 try:
@@ -43,8 +44,11 @@ class run:
 
     def run_open(self):
         if self.Redfield:
-            dh = DiagonalizeHamiltonian(self.folder)
-            rf = RedfieldConstructor(self.folder,conserve_memory=self.conserve_memory)
-            dl = DiagonalizeLiouvillian(self.folder,conserve_memory=self.conserve_memory)
+            DiagonalizeHamiltonian(self.folder)
+            if self.secular:
+                SecularRedfieldConstructor(self.folder,conserve_memory=self.conserve_memory)
+            else:
+                RedfieldConstructor(self.folder,conserve_memory=self.conserve_memory)
+            dl = DiagonalizeLiouvillian(self.folder,conserve_memory=self.conserve_memory,secular=self.secular)
         else:
             opv = OpenPolymerVibrations(os.path.join(self.folder,'params.yaml'),for_RKE=self.for_RKE,force_detailed_balance=self.fdb_flag)
