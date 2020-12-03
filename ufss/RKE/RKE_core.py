@@ -14,8 +14,8 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.integrate import RK45
 
 #Other parts of this code
-from ufss.vibronic_eigenstates.base_class import DataOrganizer
-from ufss.vibronic_eigenstates.eigenstates import PolymerVibrations
+from ufss.HLG.base_class import DataOrganizer
+from ufss.HLG.eigenstates import PolymerVibrations
 
 class RKE_Wavepackets(PolymerVibrations,DataOrganizer):
     """This class is designed to calculate perturbative wavepackets in the
