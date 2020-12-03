@@ -70,8 +70,12 @@ class FWMIsotropicAverage(object):
             # then we can avoid doing quite a few unnecessary calculations!
             random_mu_key = list(self.sc.mu.keys())[0]
             test_mu = self.sc.mu[random_mu_key]
-            if not np.allclose(test_mu[:,:,i],0):
-                pol_options.append(xyz[i])
+            if type(test_mu) is np.ndarray:
+                if not np.allclose(test_mu[:,:,i],0):
+                    pol_options.append(xyz[i])
+            elif type(test_mu) is list:
+                if not np.allclose(test_mu[i][:,:],0):
+                    pol_options.append(xyz[i])
 
         new_signal = True
         for i in pol_options:
