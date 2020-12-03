@@ -190,14 +190,13 @@ class RKE_DensityMatrices(DiagramGenerator):
         detection_type (string): options are 'polarization' (default) or 'fluorescence'
 
 """
-    def __init__(self,file_path,*,detection_type = 'polarization'):
+    def __init__(self,file_path,*,detection_type = 'polarization',
+                 conserve_memory=False):
         self.slicing_time = 0
         self.interpolation_time = 0
         self.expectation_time = 0
-        self.next_order_expectation_time = 0
-        self.convolution_time = 0
-        self.extend_time = 0
-        self.mask_time = 0
+        self.RK45_step_time = 0
+        self.dipole_dot_rho_time = 0
         self.dipole_time = 0
         self.automation_time = 0
         self.diagram_to_signal_time = 0
@@ -208,14 +207,30 @@ class RKE_DensityMatrices(DiagramGenerator):
 
         self.gamma_res = 6.91
 
+        self.sparsity_threshold = 0.1
+
+        self.conserve_memory = conserve_memory
+
         self.load_L()
 
-        self.load_mu()
+        self.set_rho_shapes()
+
+        if not self.conserve_memory:
+            self.load_mu()
+
+        try:
+            self.load_H_mu()
+            # more efficient if H_mu is available
+            self.dipole_down = self.dipole_down_H_mu
+
+        except:
+            # generally less efficient - mostly here for backwards compatibility
+            self.dipole_down = self.dipole_down_L_mu
 
         self.optical_gap = 0
 
         self.atol = 1E-6
-        self.rtol = 1E-4
+        self.rtol = 1E-5
 
         if detection_type == 'polarization':
             self.rho_to_signal = self.polarization_detection_rho_to_signal
@@ -300,6 +315,10 @@ class RKE_DensityMatrices(DiagramGenerator):
         self.calculation_time = time.time() - t0
         
         return self.signal
+
+    def save_timing(self):
+        save_dict = {'RKE_calculation_time':self.calculation_time}
+        np.savez(os.path.join(self.base_path,'RKE_calculation_time.npz'),**save_dict)
         
     def calculate_signal_all_delays(self):
         t0 = time.time()
@@ -422,10 +441,6 @@ be calculated on
             pass
         
         self.pulse_times = arrival_times
-        if self.detection_type == 'polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
             
         self.current_instructions = diagram_instructions
         instructions = diagram_instructions[0]
@@ -438,22 +453,22 @@ be calculated on
         p_of_t = self.dipole_expectation(rho,pulse_number=-1,ket_flag=True)
         return self.polarization_to_signal(p_of_t,local_oscillator_number=-1)
 
-    def fluorescence_detection_rho_to_signal(self,rho):
-        n_nonzero = rho['bool_mask']
-        L_size = self.eigenvalues[0].size
-        H_size = int(np.sqrt(L_size))
+    def integrated_polarization_detection_rho_to_signal(self,rho):    
+        p = self.integrated_dipole_expectation(rho,ket_flag=True)
+        return self.integrated_polarization_to_signal(p,local_oscillator_number=-1)
 
-        # move back to the basis the Liouvillian was written in
-        rho = self.eigenvectors['right'][:,n_nonzero].dot(rho['rho'][:,-1])
+    # def fluorescence_detection_rho_to_signal(self,rho):
+    #     L_size = self.eigenvalues[0].size
+    #     H_size = int(np.sqrt(L_size))
 
-        # reshape rho into a normal density matrix representation
-        rho = rho.reshape((H_size,H_size))
+    #     # reshape rho into a normal density matrix representation
+    #     rho = rho.reshape((H_size,H_size))
 
-        fluorescence_yield = np.array([0,1,1,self.f_yield])
+    #     fluorescence_yield = np.array([0,1,1,self.f_yield])
 
-        signal = np.dot(np.diagonal(rho),fluorescence_yield)
+    #     signal = np.dot(np.diagonal(rho),fluorescence_yield)
         
-        return signal
+    #     return signal
 
     def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_rhos = True,
                     plot_fields = False):
@@ -519,29 +534,6 @@ be calculated on
     def set_local_oscillator_phase(self,phase):
         self.efields[-1] = np.exp(1j*phase) * self.local_oscillator
 
-    # def get_rho_site_basis(self,t,key):
-    #     size_L = self.eigenvalues[0].size
-    #     size_H = int(np.sqrt(size_L))
-    #     rho_dict = self.rhos[key]
-    #     mask = rho_dict['bool_mask']
-    #     e = self.eigenvalues[0][mask]
-    #     rho = rho_dict['rho_fun'](t)*np.exp(e[:,np.newaxis]*t[np.newaxis,:])
-    #     ev = self.eigenvectors['right'][:,mask]
-    #     new_rho = ev.dot(rho).reshape(size_H,size_H,rho.shape[-1])
-    #     return new_rho
-
-    # def get_rho_site_basis_by_order(self,t,order):
-    #     keys = self.rhos.keys()
-    #     order_keys = []
-    #     for key in keys:
-    #         if len(key) == 3*order:
-    #             order_keys.append(key)
-    #     rho_total = self.get_rho_site_basis(t,order_keys.pop(0))
-    #     for key in order_keys:
-    #         rho_total += self.get_rho_site_basis(t,key)
-
-    #     return rho_total
-
     def get_closest_index_and_value(self,value,array):
         """Given an array and a desired value, finds the closest actual value
 stored in that array, and returns that value, along with its corresponding 
@@ -560,16 +552,29 @@ energy singly-excited state should be set to 0
 """
         L_save_name = os.path.join(self.base_path,'L.npz')
         try:
-            with np.load(L_save_name) as L_archive:
-                self.L = {key:csr_matrix(L_archive[key]) for key in L_archive.keys()}
+            with np.load(L_save_name,allow_pickle=True) as L_archive:
+                self.L = dict()
+                for key in L_archive.keys():
+                    L = L_archive[key]
+                    if L.dtype == np.dtype('O'):
+                        self.L[key] = L[()]
+                    else:
+                        if self.check_sparsity(L):
+                            self.L[key] = csr_matrix(L)
+                        else:
+                            self.L[key] = L
         except:
             self.L = {'all_manifolds':load_npz(L_save_name)}
+        self.manifolds = list(self.L.keys())
+
+    def check_sparsity(self,mat):
+        csr_mat = csr_matrix(mat)
+        sparsity = csr_mat.nnz / (csr_mat.shape[0]*csr_mat.shape[1])
+        if sparsity < self.sparsity_threshold:
+            return True
+        else:
+            return False
         
-    # def set_dL(self,RWA_gap):
-    #     L_rotated = self.L + eye(self.L.shape[0]) * RWA_gap * 1j
-    #     def dL(t,rho):
-    #         return L_rotated.dot(rho)
-    #     return dL
     def dL(self,t,rho):
         try:
             L = self.L['all_manifolds']
@@ -588,10 +593,7 @@ energy singly-excited state should be set to 0
 
         return L_fun
 
-    def one_time_step_function(self,rho0,t0,tf,*,manifold_key = None):#,RWA_gap = 0):
-        # dL = self.set_dL(RWA_gap)
-        # rho0_rotated = rho0 * np.exp(1j*RWA_gap * t0)
-        # rk45 = RK45(dL,t0,rho0_rotated,tf)
+    def one_time_step_function(self,rho0,t0,tf,*,manifold_key = None):
         num_steps = 0
         if manifold_key == None:
             rk45 = RK45(self.dL,t0,rho0,tf,atol=self.atol,rtol=self.rtol)
@@ -601,7 +603,7 @@ energy singly-excited state should be set to 0
         while rk45.t < tf:
             rk45.step()
             num_steps += 1
-        rho_final = rk45.y# * np.exp(-1j*RWA_gap * tf)
+        rho_final = rk45.y
         return rho_final
 
     def get_bottom_eigenvector(self):
@@ -613,7 +615,7 @@ energy singly-excited state should be set to 0
             e = L[0,0]
             ev = np.array([[1]])
         else:
-            e, ev = eigs(L,k=1,which='SM')
+            e, ev = eigs(L,k=1,which='SM',maxiter=10000)
         if e.size == 1 and np.allclose(e,0):
             pass
         else:
@@ -637,6 +639,26 @@ energy singly-excited state should be set to 0
         self.rho0 = RK_rho_container(t,rho0,pulse_number,manifold_key,
                                      interp_kind = 'zero',optical_gap = self.optical_gap)
 
+    def set_rho_shapes(self):
+        self.rho_shapes = dict()
+        if 'all_manifolds' in self.manifolds:
+            L_size = self.L['all_manifolds'].size
+            H_size = int(np.sqrt(L_size))
+            self.rho_shapes['all_manifolds'] = (H_size,H_size)
+        else:
+            H_sizes = dict()
+            for key in self.manifolds:
+                ket_key, bra_key = key
+                if ket_key == bra_key:
+                    L_size = self.L[key].shape[0]
+                    H_size = int(np.sqrt(L_size))
+                    H_sizes[ket_key] = H_size
+            for key in self.manifolds:
+                ket_key, bra_key = key
+                ket_size = H_sizes[ket_key]
+                bra_size = H_sizes[bra_key]
+                self.rho_shapes[key] = (ket_size,bra_size)
+
     def load_mu(self):
         """Load the precalculated dipole overlaps.  The dipole operator must
             be stored as a .npz file, and must contain at least one array, each with three 
@@ -647,9 +669,35 @@ energy singly-excited state should be set to 0
             with np.load(file_name) as mu_archive:
                 self.mu = {key:mu_archive[key] for key in mu_archive.keys()}
         except FileNotFoundError:
-            file_name = os.path.join(self.base_path,'mu.npz')
-            with np.load(file_name) as mu_archive:
-                self.mu = {key:mu_archive[key] for key in mu_archive.keys()}
+            try:
+                file_name = os.path.join(self.base_path,'mu_original_L_basis.npz')
+                with np.load(file_name) as mu_archive:
+                    self.mu = {key:mu_archive[key] for key in mu_archive.keys()}
+            except FileNotFoundError:
+                file_name = os.path.join(self.base_path,'mu.npz')
+                with np.load(file_name) as mu_archive:
+                    self.mu = {key:mu_archive[key] for key in mu_archive.keys()}
+        sparse_flags = []
+        for key in self.mu.keys():
+            mu_2D = np.sum(np.abs(self.mu[key])**2,axis=-1)
+            sparse_flags.append(self.check_sparsity(mu_2D))
+        sparse_flags = np.array(sparse_flags)
+        if np.allclose(sparse_flags,True):
+            self.sparse_mu_flag = True
+        else:
+            self.sparse_mu_flag = False
+
+        for key in self.mu.keys():
+            mu_x = self.mu[key][...,0]
+            mu_y = self.mu[key][...,1]
+            mu_z = self.mu[key][...,2]
+
+            if self.sparse_mu_flag:
+                self.mu[key] = [csr_matrix(mu_x),csr_matrix(mu_y),csr_matrix(mu_z)]
+            else:
+                self.mu[key] = [mu_x,mu_y,mu_z]
+
+        print('RKE_sparse_mu_flag',self.sparse_mu_flag)
         
     ### Setting the electric field to be used
 
@@ -698,18 +746,23 @@ energy singly-excited state should be set to 0
             mu = self.mu[key]
             
         if np.all(pol == x):
-            overlap_matrix = mu[:,:,0].copy()
+            overlap_matrix = mu[0]#.copy()
         elif np.all(pol == y):
-            overlap_matrix = mu[:,:,1].copy()
+            overlap_matrix = mu[1]#.copy()
         elif np.all(pol == z):
-            overlap_matrix = mu[:,:,2].copy()
+            overlap_matrix = mu[2]#.copy()
         else:
-            overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
+            overlap_matrix = mu[0]*pol[0] + mu[1]*pol[1] + mu[2]*pol[2]
+
+        # if self.sparse_mu_flag:
+        #     to_return = csr_matrix(overlap_matrix)
+        # else:
+        #     to_return = overlap_matrix
 
         t1 = time.time()
         self.dipole_time += t1-t0
 
-        return csr_matrix(overlap_matrix)
+        return overlap_matrix
 
     def manifold_key_to_array(self,key):
         """Key must be a string of exactly 2 integers, the first describing
@@ -765,12 +818,58 @@ energy singly-excited state should be set to 0
             center = -self.centers[pulse_number]
         else:
             center = self.centers[pulse_number]
-        
-        overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=ket_flag,up_flag=up_flag)
-        
+
         M = t.size
         old_rho = rho_in(t)
-        mu_old_rho = overlap_matrix.dot(old_rho)
+
+        if self.conserve_memory:
+            # move back to the basis the Liouvillian was written in
+            if 'all_manifolds' in self.manifolds:
+                ket_size,bra_size = self.rho_shapes['all_manifolds']
+            else:
+                ket_size,bra_size = self.rho_shapes[old_manifold_key]
+                
+            old_rho = old_rho.reshape(ket_size,bra_size,M)
+
+            if ket_flag:
+                old_ket_key = old_manifold_key[0]
+                new_ket_key = new_manifold_key[0]
+                if up_flag:
+                    H_mu_key = old_ket_key + '_to_' + new_ket_key
+                else:
+                    H_mu_key = new_ket_key + '_to_' + old_ket_key
+
+                mu_up_flag = up_flag
+            else:
+                old_bra_key = old_manifold_key[1]
+                new_bra_key = new_manifold_key[1]
+                if up_flag:
+                    H_mu_key = old_bra_key + '_to_' + new_bra_key
+                else:
+                    H_mu_key = new_bra_key + '_to_' + old_bra_key
+                mu_up_flag = not up_flag
+
+            overlap_matrix = self.get_H_mu(pulse_number,H_mu_key,up_flag=mu_up_flag)
+            
+            ta = time.time()
+            if ket_flag:
+                mu_old_rho = np.einsum('ij,jkl',overlap_matrix,old_rho)
+            else:
+                mu_old_rho = np.einsum('ijl,jk',old_rho,overlap_matrix)
+            tb = time.time()
+            
+            rho_vec_size = mu_old_rho.shape[0]*mu_old_rho.shape[1]
+            mu_old_rho = mu_old_rho.reshape(rho_vec_size,M)
+
+        else:
+            overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=ket_flag,up_flag=up_flag)
+        
+        
+            ta = time.time()
+            mu_old_rho = overlap_matrix.dot(old_rho)
+            tb = time.time()
+            
+        self.dipole_dot_rho_time += tb - ta
         next_rho = np.zeros(mu_old_rho.shape,dtype='complex')
 
         if M == 1:
@@ -791,14 +890,18 @@ energy singly-excited state should be set to 0
                 efield = -1j * efield
             ###########
             ###########
-            # RWA_gap = new_manifold.dot(np.array([1,-1])) * self.optical_gap
+            
             dt = self.dts[pulse_number]
             next_rho[:,0] = efield[0] * mu_old_rho[:,0] * dt
             for i in range(1,t.size):
                 rho0 = next_rho[:,i-1]
                 t0 = t[i-1]
-                next_rho[:,i] = self.one_time_step_function(rho0,t0,t[i],
-                                                            manifold_key=new_manifold_key)#,RWA_gap=RWA_gap)
+                ta = time.time()
+                next_rho[:,i] = self.one_time_step_function(rho0,t0,t[i],manifold_key=new_manifold_key)
+
+                tb = time.time()
+                self.RK45_step_time += tb - ta
+        
                 next_rho[:,i] += efield[i] * mu_old_rho[:,i] * dt
 
         # # i/hbar Straight from perturbation theory
@@ -870,9 +973,56 @@ energy singly-excited state should be set to 0
                                pulse_number = pulse_number)
 
     ### Tools for taking the expectation value of the dipole operator with perturbed density matrices
-    
-    def dipole_down(self,rho,manifold_key,*,new_manifold_mask = None,pulse_number = -1,
+
+    def dipole_down_H_mu(self,rho,manifold_key,*,new_manifold_mask = None,pulse_number = -1,
                     ket_flag=True):
+        """This method is similar to the method down, but does not involve 
+            the electric field shape or convolutions. It is the action of the 
+            dipole operator on the ket-side without TDPT effects.  It also includes
+            the dot product of the final electric field polarization vector."""
+        
+        if not ket_flag:
+            raise Exception('Not implemented for bra-side')
+        old_manifold_key = manifold_key
+        old_ket_key = old_manifold_key[0]
+        new_ket_key = str(int(old_ket_key)-1)
+        mu_key = new_ket_key + '_to_' + old_ket_key
+
+        if ket_flag:
+            center = - self.centers[pulse_number]
+            conjugate_flag = True
+        else:
+            center = self.centers[pulse_number]
+            conjugate_flag = False
+
+        t_size = rho.shape[-1]
+        
+        if 'all_manifolds' in self.L.keys():
+            L_size = rho.size
+            H_size = int(np.sqrt(L_size))
+            rho = rho.reshape(H_size,H_size,t_size)
+        else:
+            ket_manifold_key = old_manifold_key[0] + old_manifold_key[0]
+            ket_L_manifold_size = self.L[ket_manifold_key].shape[0]
+            ket_H_size = int(np.sqrt(ket_L_manifold_size))
+
+            bra_manifold_key = old_manifold_key[1] + old_manifold_key[1]
+            bra_L_manifold_size = self.L[bra_manifold_key].shape[0]
+            bra_H_size = int(np.sqrt(bra_L_manifold_size))
+
+            rho = rho.reshape(ket_H_size,bra_H_size,t_size)
+        
+        overlap_matrix = self.get_H_mu(pulse_number,mu_key,ket_flag=ket_flag,up_flag=False)
+
+        t0 = time.time()
+        polarization_field = np.einsum('ij,jik',overlap_matrix,rho)
+                
+        t1 = time.time()
+
+        return polarization_field
+
+    def dipole_down_L_mu(self,rho,manifold_key,*,new_manifold_mask = None,
+                         pulse_number = -1,ket_flag=True):
         """This method is similar to the method down, but does not involve 
             the electric field shape or convolutions. It is the action of the 
             dipole operator on the ket-side without TDPT effects.  It also includes
@@ -915,6 +1065,49 @@ energy singly-excited state should be set to 0
 
         return polarization_field
 
+    def load_H_mu(self):
+        parent_dir = os.path.split(self.base_path)[0]
+        file_name = os.path.join(parent_dir,'closed','mu.npz')
+
+        with np.load(file_name) as mu_archive:
+            self.H_mu = {key:mu_archive[key] for key in mu_archive.keys()}
+
+    def get_H_mu(self,pulse_number,key,ket_flag=True,up_flag=True):
+        """Calculates the dipole matrix given the electric field polarization vector,
+            if ket_flag = False then uses the bra-interaction"""
+        t0 = time.time()
+        pol = self.polarization_sequence[pulse_number]
+
+        x = np.array([1,0,0])
+        y = np.array([0,1,0])
+        z = np.array([0,0,1])
+        try:
+            mu = self.H_mu[key]
+        except KeyError:
+            try:
+                key = 'up'
+                mu = self.H_mu[key]
+            except KeyError:
+                key = 'ket_up'
+                mu = self.H_mu[key]
+            
+        if np.all(pol == x):
+            overlap_matrix = mu[:,:,0].copy()
+        elif np.all(pol == y):
+            overlap_matrix = mu[:,:,1].copy()
+        elif np.all(pol == z):
+            overlap_matrix = mu[:,:,2].copy()
+        else:
+            overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
+
+        if not up_flag:
+            overlap_matrix = overlap_matrix.T
+
+        t1 = time.time()
+        self.dipole_time += t1-t0
+
+        return overlap_matrix
+
     def set_undersample_factor(self,frequency_resolution):
         """dt is set by the pulse. However, the system dynamics may not require such a 
             small dt.  Therefore, this allows the user to set a requested frequency
@@ -927,42 +1120,41 @@ energy singly-excited state should be set to 0
     def dipole_expectation(self,rho_in,*,pulse_number = -1,ket_flag=True):
         """Computes the expectation value of the dipole operator"""
         t0 = time.time()
+
+        pulse_number = -1
+        
         pulse_time = self.pulse_times[pulse_number]
-        dt = self.dts[pulse_number]
-        efield_t = self.efield_times[pulse_number]
+        
+        efield_t = self.efield_times[pulse_number] + pulse_time
 
         if ket_flag:
             center = - self.centers[pulse_number]
         else:
             center = self.centers[pulse_number]
-
-        M = efield_t.size
-
-        #pulse_time is at the center of self.t
-        center_index = self.t.size//2
-        pulse_start_ind = center_index - (M//2)
-        pulse_end_ind = center_index + (M//2 + M%2)
         
-
         # The signal is zero before the final pulse arrives, and persists
         # until it decays. Therefore we avoid taking the sum at times
         # where the signal is zero.
-        t = self.t[pulse_start_ind:] + pulse_time
+        t = self.t + pulse_time
 
+        pulse_start_ind = np.argmin(np.abs(t-efield_t[0]))
+        if efield_t[0] < t[pulse_start_ind]:
+            pulse_start_ind -= 1
+        pulse_end_ind = np.argmin(np.abs(t-efield_t[-1]))
+        if efield_t[-1] > t[pulse_end_ind]:
+            pulse_end_ind += 1
+        
+        t_slice = slice(pulse_start_ind,None,None)
+        t1_slice = slice(pulse_start_ind,pulse_end_ind,None)
         u = self.undersample_factor
-        
-        t1 = self.t[pulse_start_ind:pulse_end_ind] + pulse_time
+        t2_slice = slice(pulse_end_ind,None,u)
 
-        rho1 = rho_in(t1).copy()
-        
-        t2 = self.t[pulse_end_ind:] + pulse_time
-        
-        # if u != 1:
-        #     t2 = np.arange(pulse_end,t_end+1.5*dt*u,dt*u)
-        # else:
-        #     t2 = np.arange(pulse_end,t_end+dt/2,dt)
+        t = self.t[t_slice] + pulse_time
+        t1 = self.t[t1_slice] + pulse_time
+        t2 = self.t[t2_slice] + pulse_time
 
-        rho2 = rho_in(t2).copy()
+        rho1 = rho_in(t1)
+        rho2 = rho_in(t2)
 
         rho1 *= np.exp(-1j * center * t1[np.newaxis,:])
 
@@ -986,7 +1178,8 @@ energy singly-excited state should be set to 0
 
         # Interpolate expectation value back onto the full t-grid
         if u != 1:
-            exp_val_interp = scipy.interpolate.interp1d(t_u,exp_val_u,kind='cubic')
+            # Often must extrapolate the final point
+            exp_val_interp = scipy.interpolate.interp1d(t_u,exp_val_u,kind='cubic',fill_value='extrapolate')
             exp_val = exp_val_interp(t)
         else:
             exp_val = exp_val_u
@@ -999,62 +1192,77 @@ energy singly-excited state should be set to 0
         
         # set non-zero values using t_slice
         ret_val[pulse_start_ind:] = exp_val
-        
         return ret_val
 
-#     def integrated_dipole_expectation(self,bra_dict_original,ket_dict_original,*,pulse_number = -1):
-#         """Given two wavefunctions, this computes the expectation value of the two with respect 
-# to the dipole operator.  Both wavefunctions are taken to be kets, and the one named 'bra' is
-# converted to a bra by taking the complex conjugate.  This assumes that the signal will be
-# frequency integrated."""
-#         pulse_time = self.pulse_times[pulse_number]
-#         pulse_time_ind = np.argmin(np.abs(self.t - pulse_time))
-
-#         pulse_start_ind = pulse_time_ind - self.size//2
-#         pulse_end_ind = pulse_time_ind + self.size//2 + self.size%2
+    def integrated_dipole_expectation(self,rho_in,*,ket_flag=True):
+        """Computes the expectation value of the dipole operator"""
         
-#         # The signal is zero before the final pulse arrives, and persists
-#         # until it decays. However, if no frequency information is
-#         # required, fewer time points are needed for this t_slice
-#         t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-
-#         bra_in = bra_dict_original['psi'][:,t_slice].copy()
-#         ket_in = ket_dict_original['psi'][:,t_slice].copy()
+        pulse_number = -1
         
+        pulse_time = self.pulse_times[pulse_number]
+        t = pulse_time + self.efield_times[pulse_number]
+
+        if ket_flag:
+            center = - self.centers[pulse_number]
+        else:
+            center = self.centers[pulse_number]
+
+        rho = rho_in(t)
+
+        rho_nonzero = rho_in.bool_mask
+        try:
+            ev = self.eigenvalues['all_manifolds'][rho_nonzero]
+        except KeyError:
+            ev = self.eigenvalues[rho_in.manifold_key][rho_nonzero]
+
+        rho = rho * np.exp((ev[:,np.newaxis] - 1j*center)*t)
+
+        rho_dict = {'bool_mask':rho_nonzero,'rho':rho,'manifold_key':rho_in.manifold_key}
+
+        t0 = time.time()
+        exp_val = self.dipole_down(rho_dict,pulse_number = pulse_number,
+                                     ket_flag = ket_flag)
         
-#         manifold1_num = bra_dict_original['manifold_num']
-#         manifold2_num = ket_dict_original['manifold_num']
+        tb = time.time()
+        self.expectation_time += tb-t0
 
-#         bra_nonzero = bra_dict_original['bool_mask']
-#         ket_nonzero = ket_dict_original['bool_mask']
+        return exp_val
+
+    def get_local_oscillator(self):
+        local_oscillator_number = -1
+        efield_t = self.efield_times[local_oscillator_number]
+        efield = self.efields[local_oscillator_number]
+
+        if efield_t.size == 1:
+            # Impulsive limit: delta in time is flat in frequency
+            efield_ft = np.ones(self.w.size)*efield
+            return efield_ft
         
-#         # exp_factor_bra = self.unitary[manifold1_num][bra_nonzero,t_slice]
-#         # exp_factor_ket = self.unitary[manifold2_num][ket_nonzero,t_slice]
-        
-#         # bra_in *= exp_factor_bra
-#         # ket_in *= exp_factor_ket
+        e_dt = efield_t[1] - efield_t[0]
+        dt = self.t[1] - self.t[0]
+            
+        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
+            full_efield = np.zeros(self.t.size,dtype='complex')
 
-#         bra_dict = {'bool_mask':bra_nonzero,'manifold_num':manifold1_num,'psi':bra_in}
-#         ket_dict = {'bool_mask':ket_nonzero,'manifold_num':manifold2_num,'psi':ket_in}
+            # the local oscillator sets the "zero" on the clock
+            pulse_time_ind = np.argmin(np.abs(self.t))
 
-#         if np.abs(manifold1_num - manifold2_num) != 1:
-#             warnings.warn('Dipole only connects manifolds 0 to 1 or 1 to 2')
-#             return None
+            pulse_start_ind = pulse_time_ind - efield_t.size//2
+            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
 
-#         if manifold1_num > manifold2_num:
-#             bra_new_mask = ket_dict['bool_mask']
-#             bra_dict = self.dipole_down(bra_dict,new_manifold_mask = bra_new_mask,
-#                                         pulse_number = pulse_number)
-#         else:
-#             ket_new_mask = bra_dict['bool_mask']
-#             ket_dict = self.dipole_down(ket_dict,new_manifold_mask = ket_new_mask,
-#                                         pulse_number = pulse_number)
+            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
+            
+            full_efield[t_slice] = efield
+            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+        else:
+            efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
+            efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
+            fill_value = (efield_ft[0],efield_ft[-1])
+            f = sinterp1d(efield_w,efield_ft,fill_value = fill_value,
+                          bounds_error=False,kind='quadratic')
+            efield_ft = f(self.w)
 
-#         bra = bra_dict['psi']
-#         ket = ket_dict['psi']
-
-#         exp_val = np.sum(np.conjugate(bra) * ket,axis=0)
-#         return exp_val
+        return efield_ft
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
@@ -1069,20 +1277,8 @@ energy singly-excited state should be set to 0
         efield_t = self.efield_times[local_oscillator_number]
         
         pulse_time_ind = np.argmin(np.abs(self.t))
-        efield = np.zeros(self.t.size,dtype='complex')
-
-        if efield_t.size == 1:
-            # Impulsive limit
-            efield[pulse_time_ind] = self.efields[local_oscillator_number]
-            efield = fftshift(ifft(ifftshift(efield)))*efield.size#/np.sqrt(2*np.pi)
-        else:
-            pulse_start_ind = pulse_time_ind - efield_t.size//2
-            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
-
-            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-            
-            efield[t_slice] = self.efields[local_oscillator_number]
-            efield = fftshift(ifft(ifftshift(efield)))*self.t.size*(self.t[1]-self.t[0])#/np.sqrt(2*np.pi)
+        
+        efield = self.get_local_oscillator()
 
         halfway = self.w.size//2
         pm = self.w.size//(2*undersample_factor)
@@ -1098,28 +1294,26 @@ energy singly-excited state should be set to 0
         else:
             return 1j*signal
 
-    def polarization_to_integrated_signal(self,P_of_t,*,
-                                          local_oscillator_number = -1):
-        """This function generates a frequency-integrated signal from a polarization field
-local_oscillator_number - usually the local oscillator will be the last pulse in the list self.efields
-"""
-        pulse_time = self.pulse_times[local_oscillator_number]
-        pulse_time_ind = np.argmin(np.abs(self.t - pulse_time))
+    def integrated_polarization_to_signal(self,P,*,
+                                local_oscillator_number = -1):
+        """This function generates a frequency-resolved signal from a polarization field
+           local_oscillator_number - usually the local oscillator will be the last pulse 
+                                     in the list self.efields"""
+        efield_t = self.efield_times[local_oscillator_number]
 
-        pulse_start_ind = pulse_time_ind - self.size//2
-        pulse_end_ind = pulse_time_ind + self.size//2 + self.size%2
+        efield = self.efields[local_oscillator_number]
 
-        t_slice = slice(pulse_start_ind, pulse_end_ind,1)
-        t = self.t[t_slice]
-        P_of_t = P_of_t[t_slice]
-        if self.gamma != 0:
-            exp_factor = np.exp(-self.gamma * np.abs(t-pulse_time))
-            P_of_t *= exp_factor
-
-        if self.efield_t.size == 1:
-            signal = P_of_t[self.size//2] * self.eifelds[local_oscillator_number]
-        else:
-            efield = self.efields[local_oscillator_number]
-            signal = np.trapz(np.conjugate(efield)*P_of_t,x=t)
-        
+        signal = np.trapz(P * np.conjugate(efield),x=efield_t)
         return np.imag(signal)
+
+    def save(self,file_name,pulse_delay_names,*,use_base_path=True):
+        if use_base_path:
+            file_name = os.path.join(self.base_path,file_name)
+        save_dict = {}
+        for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
+            save_dict[name] = delays
+        if self.detection_type == 'polarization':
+            save_dict['wt'] = self.w
+        save_dict['signal'] = self.signal
+        save_dict['signal_calculation_time'] = self.calculation_time
+        np.savez(file_name,**save_dict)
