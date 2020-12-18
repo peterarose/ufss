@@ -46,9 +46,9 @@ class DiagramDrawer:
             interaction_counter += 1
         display(self.c,exclude=exclude)
 
-    def display_diagrams(self,diagrams):
+    def display_diagrams(self,diagrams,*,exclude="image/png"):
         for diagram in diagrams:
-            self.display_diagram(diagram)
+            self.display_diagram(diagram,exclude=exclude)
 
     def double_sided(self,pulse_num):
         self.c.stroke(pyx.path.line(0,pulse_num,0,pulse_num+1))
