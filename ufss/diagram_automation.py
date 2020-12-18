@@ -33,13 +33,18 @@ class DiagramDrawer:
         for diagram in diagrams:
             self.save_diagram(diagram,folder_name=folder_name)
 
-    def display_diagram(self,diagram):
+    def display_diagram(self,diagram,*,exclude="image/png"):
+        """Displays a diagram in a Jupyter notebook environment or similar
+        Args:
+            diagram: Feynman diagram to be drawn, must be a list or tuple of tuples
+            exclude: MIME types to exclude when attempting to display diagram 
+"""
         self.c = pyx.canvas.canvas()
         interaction_counter = 0
         for KB,n in diagram:
             self.draw_functions[KB](n,interaction_counter)
             interaction_counter += 1
-        display(self.c)
+        display(self.c,exclude=exclude)
 
     def display_diagrams(self,diagrams):
         for diagram in diagrams:
@@ -117,7 +122,8 @@ class DiagramGenerator(DiagramDrawer):
     def __init__(self,*,detection_type = 'polarization'):
         DiagramDrawer.__init__(self)
 
-        # Code will not actually function until the following three empty lists are set by the user
+        # Code will not actually function until the following three empty
+        # lists are set by the user
         self.efield_times = [] #initialize empty list of times assoicated with each electric field shape
         self.efield_wavevectors = []
 
@@ -141,11 +147,6 @@ class DiagramGenerator(DiagramDrawer):
             self.filter_instructions = self.polarization_detection_filter_instructions
         elif detection_type == 'fluorescence':
             self.filter_instructions = self.fluorescence_detection_filter_instructions
-        elif detection_type == 'no_filter':
-            self.filter_instructions = self.no_filter
-        else:
-            warnings.warn('Did not recognize detection_type keyword argument, will return all causal diagrams')
-            self.filter_instructions
 
     def interaction_tuple_to_str(self,tup):
         """Converts a tuple, tup = (nr,nc) into a string of +'s and -'s
@@ -187,15 +188,6 @@ class DiagramGenerator(DiagramDrawer):
             return True
         else:
             return False
-
-    def no_filter(self,instructions):
-        return True
-
-    def set_f_list(self):
-        f_list = []
-        for i in range(len(self.efield_wavectors)):
-            f_list.append(self.wavevector_dict[i])
-        return f_list
 
     def instructions_from_permutation(self,perm):
         f_list = []
@@ -288,4 +280,59 @@ class DiagramGenerator(DiagramDrawer):
         rho_instructions_list = self.get_diagrams(arrival_times)
         wavefunction_instructions = self.convert_rho_instructions_list_to_psi_instructions_list(rho_instructions_list)
         return wavefunction_instructions
-        
+
+    def get_diagram_excitation_manifold(self,diagram,*,number_of_interactions=2):
+        rho_manifold = np.array([0,0])
+        for ins,pulse_num in diagram[:number_of_interactions]:
+            rho_manifold += self.instruction_to_manifold_transition[ins]
+        if rho_manifold[0] == rho_manifold[1]:
+            return rho_manifold[0]
+        else:
+            return None
+
+    def filter_diagrams_by_excitation_manifold(self,diagrams,*,manifold=1,number_of_interactions=2):
+        new_diagrams = []
+        for diagram in diagrams:
+            man = self.get_diagram_excitation_manifold(diagram,number_of_interactions=number_of_interactions)
+            if man == manifold:
+                new_diagrams.append(diagram)
+        return new_diagrams
+
+    def get_diagram_sign(self,diagram):
+        if len(diagram) % 2:
+            sign = 1j
+        else:
+            sign = 1
+        for ins,pulse_num in diagram:
+            if 'K' in ins:
+                sign *= -1j
+            elif 'B' in ins:
+                sign *= 1j
+            else:
+                raise Exception('diagram is not in proper format')
+            
+        return sign
+
+    def filter_diagrams_by_sign(self,diagrams,*,sign=1):
+        new_diagrams = []
+        for diagram in diagrams:
+            diagram_sign = self.get_diagram_sign(diagram)
+            if diagram_sign == sign:
+                new_diagrams.append(diagram)
+        return new_diagrams
+
+    def remove_all_permutations(self,diagrams):
+        new_diagrams = []
+        diagram_weights = []
+        set_list = []
+        for diagram in diagrams:
+            new_set = set(diagram)
+            try:
+                ind = set_list.index(new_set)
+                diagram_weights[ind] += 1
+            except ValueError:
+                new_diagrams.append(diagram)
+                diagram_weights.append(1)
+                set_list.append(new_set)
+
+        return diagram_weights, new_diagrams
