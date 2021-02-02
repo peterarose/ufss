@@ -487,20 +487,12 @@ be calculated on
     def get_psi_eigen_basis(self,t,key):
         psi_obj = self.psis[key]
         mask = psi_obj.bool_mask
-        manifold_num = self.manifold_key_to_number(psi_obj.manifold_key)
-        e = self.eigenvalues[psi_obj.manifold_key][mask]
+        all_e = self.eigenvalues[psi_obj.manifold_key]
+        e = all_e[mask]
         psi = psi_obj(t)*np.exp(-1j*e[:,np.newaxis]*t[np.newaxis,:])
-        full_size = 0
-        for i in range(len(self.eigenvalues)):
-            full_size += self.eigenvalues[i].size
-        total_psi = np.zeros(full_size,t.size)
-        start = 0
-        for i in range(len(self.eigenvalues)):
-            if i == manifold_num:
-                end = start + self.eigenvalues[i].size
-                total_psi[start:end,:] = new_psi
-            else:
-                start += self.eigenvalues[i].size
+        full_size = all_e.size
+        total_psi = np.zeros((full_size,t.size),dtype='complex')
+        total_psi[mask,:] = psi
         return total_psi
 
     def get_psi_site_basis(self,t,key):
@@ -628,7 +620,7 @@ energy singly-excited state should be set to 0
         """Sets the sequences used for either parallel or crossed pump and probe
         
         Args:
-            polarization_list (list): list of four strings, can be 'x','y' or 'z'
+            polarization_list (list): list of strings, can be 'x','y', or 'z' for linear polarizations or 'r' and 'l' for right and left circularly polarized light, respectively
         Returns:
             None: sets the attribute polarization sequence
 """
@@ -636,7 +628,9 @@ energy singly-excited state should be set to 0
         x = np.array([1,0,0])
         y = np.array([0,1,0])
         z = np.array([0,0,1])
-        pol_options = {'x':x,'y':y,'z':z}
+        r = np.array([1,-1j,0])/np.sqrt(2)
+        l = np.conjugate(r)
+        pol_options = {'x':x,'y':y,'z':z,'r':r,'l':l}
 
         self.polarization_sequence = [pol_options[pol] for pol in polarization_list]
         if reset_psis:
@@ -676,7 +670,7 @@ energy singly-excited state should be set to 0
             overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
 
         if not up_flag:
-            overlap_matrix = overlap_matrix.T
+            overlap_matrix = np.conjugate(overlap_matrix.T)
             boolean_matrix = boolean_matrix.T
 
         t1 = time.time()
@@ -1156,3 +1150,17 @@ alias transitions onto nonzero electric field amplitudes.
                                  *np.exp(-self.t21_array**2/(2*sigma**2))[:,np.newaxis,np.newaxis])
         sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
         self.signal = sig_tau_w
+
+    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True):
+        if use_base_path:
+            file_name = os.path.join(self.base_path,file_name)
+        save_dict = {}
+        if len(pulse_delay_names) == 0:
+            pulse_delay_names = ['t' + str(i) for i in range(len(self.all_pulse_delays))]
+        for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
+            save_dict[name] = delays
+        if self.detection_type == 'polarization':
+            save_dict['wt'] = self.w
+        save_dict['signal'] = self.signal
+        save_dict['signal_calculation_time'] = self.calculation_time
+        np.savez(file_name,**save_dict)
