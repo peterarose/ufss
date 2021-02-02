@@ -764,7 +764,7 @@ energy singly-excited state should be set to 0
         """Sets the sequences used for either parallel or crossed pump and probe
         
         Args:
-            polarization_list (list): list of four strings, can be 'x','y' or 'z'
+            polarization_list (list): list of strings, can be 'x','y', or 'z' for linear polarizations or 'r' and 'l' for right and left circularly polarized light, respectively
         Returns:
             None: sets the attribute polarization sequence
 """
@@ -772,7 +772,9 @@ energy singly-excited state should be set to 0
         x = np.array([1,0,0])
         y = np.array([0,1,0])
         z = np.array([0,0,1])
-        pol_options = {'x':x,'y':y,'z':z}
+        r = np.array([1,-1j,0])/np.sqrt(2)
+        l = np.conjugate(r)
+        pol_options = {'x':x,'y':y,'z':z,'r':r,'l':l}
 
         self.polarization_sequence = [pol_options[pol] for pol in polarization_list]
         if reset_rhos:
@@ -787,6 +789,13 @@ energy singly-excited state should be set to 0
         t0 = time.time()
         pol = self.polarization_sequence[pulse_number]
 
+        if up_flag == ket_flag:
+            # rotating term
+            pass
+        else:
+            # counter-rotating term
+            pol = np.conjugate(pol)
+            
         x = np.array([1,0,0])
         y = np.array([0,1,0])
         z = np.array([0,0,1])
@@ -988,7 +997,7 @@ alias transitions onto nonzero electric field amplitudes.
                 else:
                     H_mu_key = new_ket_key + '_to_' + old_ket_key
 
-                mu_up_flag = up_flag
+                rotating_flag = up_flag
             else:
                 old_bra_key = old_manifold_key[1]
                 new_bra_key = new_manifold_key[1]
@@ -996,9 +1005,9 @@ alias transitions onto nonzero electric field amplitudes.
                     H_mu_key = old_bra_key + '_to_' + new_bra_key
                 else:
                     H_mu_key = new_bra_key + '_to_' + old_bra_key
-                mu_up_flag = not up_flag
+                rotating_flag = not up_flag
 
-            overlap_matrix = self.get_H_mu(pulse_number,H_mu_key,up_flag=mu_up_flag)
+            overlap_matrix = self.get_H_mu(pulse_number,H_mu_key,rotating_flag=rotating_flag)
             
             t0 = time.time()
             if ket_flag:
@@ -1149,7 +1158,7 @@ alias transitions onto nonzero electric field amplitudes.
         with np.load(file_name) as mu_archive:
             self.H_mu = {key:mu_archive[key] for key in mu_archive.keys()}
 
-    def get_H_mu(self,pulse_number,key,up_flag=True):
+    def get_H_mu(self,pulse_number,key,rotating_flag=True):
         """Calculates the dipole matrix given the electric field polarization vector"""
         t0 = time.time()
         pol = self.polarization_sequence[pulse_number]
@@ -1176,8 +1185,8 @@ alias transitions onto nonzero electric field amplitudes.
         else:
             overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
 
-        if not up_flag:
-            overlap_matrix = overlap_matrix.T
+        if not rotating_flag:
+            overlap_matrix = np.conjugate(overlap_matrix.T)
 
         t1 = time.time()
         self.dipole_time += t1-t0
@@ -1227,7 +1236,7 @@ alias transitions onto nonzero electric field amplitudes.
 
             rho = rho.reshape(ket_H_size,bra_H_size,t_size)
         
-        overlap_matrix = self.get_H_mu(pulse_number,mu_key,up_flag=False)
+        overlap_matrix = self.get_H_mu(pulse_number,mu_key,rotating_flag=False)
 
         # e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
         # boolean_matrix = boolean_matrix * e_mask
@@ -1523,10 +1532,12 @@ alias transitions onto nonzero electric field amplitudes.
         sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
         self.signal = sig_tau_w
 
-    def save(self,file_name,pulse_delay_names,*,use_base_path=True):
+    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True):
         if use_base_path:
             file_name = os.path.join(self.base_path,file_name)
         save_dict = {}
+        if len(pulse_delay_names) == 0:
+            pulse_delay_names = ['t' + str(i) for i in range(len(self.all_pulse_delays))]
         for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
             save_dict[name] = delays
         if self.detection_type == 'polarization':
