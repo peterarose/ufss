@@ -266,9 +266,11 @@ class DiagramGenerator(DiagramDrawer):
     def get_diagrams(self,arrival_times):
         
         if self.detection_type == 'polarization' or self.detection_type == 'integrated_polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
+            if len(arrival_times) == len(self.efield_wavevectors) + 1:
+                # If the arrival time of the local oscillator was included in the list arrival_times,
+                # remove it, it is not relevant to diagram generation
+                arrival_times = arrival_times[:-1]
+        times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
         
         efield_permutations = self.relevant_permutations(times)
         all_instructions = []
