@@ -359,8 +359,8 @@ be calculated on
         self.pulse_times = arrival_times
         diagram_instructions = self.get_wavefunction_diagrams(arrival_times)
         self.current_instructions = diagram_instructions
-        if len(diagram_instructions) == 0:
-            print(arrival_times)
+        # if len(diagram_instructions) == 0:
+        #     print(arrival_times)
 
         t1 = time.time()
         try:
