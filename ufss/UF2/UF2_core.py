@@ -402,7 +402,7 @@ be calculated on
         p_of_t = self.dipole_expectation(bra_dict,ket_dict,pulse_number = -1)
         return self.polarization_to_signal(p_of_t,local_oscillator_number=-1)
 
-    def integrated_polarization_detection_rho_to_signal(self,bra_dict,ket_dict):
+    def integrated_polarization_detection_signal(self,bra_dict,ket_dict):
         p = self.integrated_dipole_expectation(bra_dict,ket_dict,pulse_number=-1)
         return self.integrated_polarization_to_signal(p,local_oscillator_number=-1)
 
@@ -1059,7 +1059,7 @@ alias transitions onto nonzero electric field amplitudes.
         e_center = -self.centers[pulse_number]
 
         bra_in = bra_in(t) * np.exp(-1j*bra_ev[:,np.newaxis]*t[np.newaxis,:])
-        ket_in = ket_in(t1) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t[np.newaxis,:])
+        ket_in = ket_in(t) * np.exp(-1j*(ket_ev[:,np.newaxis]+e_center)*t[np.newaxis,:])
         
         bra_dict = {'bool_mask':bra_nonzero,'manifold_key':manifold1_key,'psi':bra_in}
         ket_dict = {'bool_mask':ket_nonzero,'manifold_key':manifold2_key,'psi':ket_in}
@@ -1135,12 +1135,19 @@ alias transitions onto nonzero electric field amplitudes.
         """This function generates a frequency-resolved signal from a polarization field
            local_oscillator_number - usually the local oscillator will be the last pulse 
                                      in the list self.efields"""
+        pulse_time = self.pulse_times[local_oscillator_number]
+        
         efield_t = self.efield_times[local_oscillator_number]
+
+        t = efield_t + pulse_time
 
         efield = self.efields[local_oscillator_number]
 
-        signal = np.trapz(P * np.conjugate(efield),x=efield_t)
-        return np.imag(signal)
+        signal = np.trapz(P * np.conjugate(efield),x=t)
+        if not self.return_complex_signal:
+            return np.imag(signal)
+        else:
+            return 1j*signal
 
     def add_gaussian_linewidth(self,sigma):
         self.old_signal = self.signal.copy()
