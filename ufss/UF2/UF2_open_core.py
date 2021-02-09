@@ -419,7 +419,7 @@ be calculated on
         t1 = time.time()
         
         if len(self.current_instructions) == 0:
-            print('No diagrams for arrival times ',arrival_times)
+            # print('No diagrams for arrival times ',arrival_times)
             signal = 0
         else:
             instructions = self.current_instructions[0]
@@ -597,7 +597,7 @@ be calculated on
         for key in order_keys:
             counter += 1
             rho_total += self.get_rho(t,key,original_L_basis=original_L_basis)
-        print(counter)
+        # print(counter)
 
         return rho_total
 
@@ -1037,7 +1037,7 @@ alias transitions onto nonzero electric field amplitudes.
             overlap_matrix, n_nonzero = self.mask_dipole_matrix(boolean_matrix,overlap_matrix,m_nonzero,
                                                                 next_manifold_mask = new_manifold_mask)
 
-        
+
             t0 = time.time()
             rho = overlap_matrix.dot(rho)
             t1 = time.time()
@@ -1521,7 +1521,10 @@ alias transitions onto nonzero electric field amplitudes.
         efield = self.efields[local_oscillator_number]
 
         signal = np.trapz(P * np.conjugate(efield),x=efield_t)
-        return np.imag(signal)
+        if not self.return_complex_signal:
+            return np.imag(signal)
+        else:
+            return 1j*signal
 
     def add_gaussian_linewidth(self,sigma):
         self.old_signal = self.signal.copy()
