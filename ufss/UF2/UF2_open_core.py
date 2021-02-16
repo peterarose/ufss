@@ -619,7 +619,7 @@ be calculated on
         bool_mask[initial_state] = True
 
         if bool_mask.sum() != 1:
-            print('Could not automatically determine the initial thermal state. User must specify the initial condition, rho^(0), manually')
+            warnings.warn('Could not automatically determine the initial thermal state. User must specify the initial condition, rho^(0), manually')
             return None
 
         
@@ -627,7 +627,7 @@ be calculated on
         self.rho0 = rho_container(t,rho0,bool_mask,None,'00',interp_kind='zero',
                                   interp_left_fill=1)
 
-    def set_rho0_manual(self,manifold_key,bool_mask,weights):
+    def set_rho0_manual_L_eigenbasis(self,manifold_key,bool_mask,weights):
         """
 """
         ev = self.eigenvalues[manifold_key][bool_mask]
@@ -636,6 +636,42 @@ be calculated on
         
         rho0 = np.ones((bool_mask.sum(),t.size),dtype=complex) * weights[:,np.newaxis]
 
+        if manifold_key == 'all_manifolds':
+            manifold_key = '00'
+
+        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,interp_kind='zero',
+                                  interp_left_fill=1)
+
+    def set_rho0_manual(self,rho0,*,manifold_key = 'all_manifolds'):
+        """Set the initial condition.  Must be done after setting the pulse shapes
+        Args:
+            rho0 (2D np.array) : the initial density matrix, in the basis that
+                the Liouvillian was defined in
+            manfifold_key (str) : manifold in which initial density matrix is 
+                defined (usually 'all_manifolds' (default) or '00')
+"""
+        try:
+            evl = self.left_eigenvectors[manifold_key]
+        except AttributeError:
+            self.load_left_eigenvectors()
+            evl = self.left_eigenvectors[manifold_key]
+
+        rho0_flat = rho0.flatten() # ufss always works with vectors
+        
+
+        rho0_eig = evl.dot(rho0_flat) # transform into Liouvillian eigenbasis
+        
+        nonzero_inds = np.where(np.abs(rho0_eig) > 1E-12)[0]
+
+        bool_mask = np.zeros(rho0_eig.size,dtype='bool')
+        bool_mask[nonzero_inds] = True
+
+        rho0_trimmed = rho0_eig[nonzero_inds]
+
+        t = self.efield_times[0]
+        time_dependence = np.ones(t.size)
+        rho0 = rho0_trimmed[:,np.newaxis] * time_dependence[np.newaxis,:]
+        
         if manifold_key == 'all_manifolds':
             manifold_key = '00'
 
@@ -675,18 +711,21 @@ energy singly-excited state should be set to 0
                     self.eigenvectors[key] = ev
 
         if self.conserve_memory:
-            left_eigvec_save_name = os.path.join(self.base_path,'left_eigenvectors.npz')
-            with np.load(left_eigvec_save_name,allow_pickle=True) as left_eigvec_archive:
-                self.left_eigenvectors = dict()
-                for key in self.manifolds:
-                    evl = left_eigvec_archive[key]
-                    if evl.dtype == np.dtype('O'):
-                        self.left_eigenvectors[key] = evl[()]
-                    elif self.check_sparsity(evl):
-                        self.left_eigenvectors[key] = csr_matrix(evl)
-                    else:
-                        self.left_eigenvectors[key] = evl
+            self.load_left_eigenvectors()
 
+    def load_left_eigenvectors(self):
+        left_eigvec_save_name = os.path.join(self.base_path,'left_eigenvectors.npz')
+        with np.load(left_eigvec_save_name,allow_pickle=True) as left_eigvec_archive:
+            self.left_eigenvectors = dict()
+            for key in self.manifolds:
+                evl = left_eigvec_archive[key]
+                if evl.dtype == np.dtype('O'):
+                    self.left_eigenvectors[key] = evl[()]
+                elif self.check_sparsity(evl):
+                    self.left_eigenvectors[key] = csr_matrix(evl)
+                else:
+                    self.left_eigenvectors[key] = evl
+                        
     def set_rho_shapes(self):
         self.rho_shapes = dict()
         if 'all_manifolds' in self.manifolds:
