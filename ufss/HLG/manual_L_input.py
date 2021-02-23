@@ -119,8 +119,8 @@ class ManualL:
         
         for i in range(3):
             mu_ket_up[:,:,i] = np.kron(self.mu_ket_up[:,:,i],II.T)
-            mu_ket_down[:,:,i] = np.kron(self.mu_ket_up[:,:,i].T,II.T)
-            mu_bra_up[:,:,i] = np.kron(II,self.mu_ket_up[:,:,i])
+            mu_ket_down[:,:,i] = np.kron(np.conjugate(self.mu_ket_up[:,:,i].T),II.T)
+            mu_bra_up[:,:,i] = np.kron(II,np.conjugate(self.mu_ket_up[:,:,i]))
             mu_bra_down[:,:,i] = np.kron(II,self.mu_ket_up[:,:,i].T)
 
         mu_ket_up_t = self.mu3D_eigentransform(mu_ket_up)
@@ -150,8 +150,8 @@ class ManualL:
         II = np.eye(self.mu_ket_up.shape[0])
 
         mu_ket_up = np.kron(self.mu_ket_up,II.T)
-        mu_ket_down = np.kron(self.mu_ket_up.T,II.T)
-        mu_bra_up = np.kron(II,self.mu_ket_up)
+        mu_ket_down = np.kron(np.conjugate(self.mu_ket_up.T),II.T)
+        mu_bra_up = np.kron(II,np.conjugate(self.mu_ket_up))
         mu_bra_down = np.kron(II,self.mu_ket_up.T)
 
         mu_mask_tol = 10
