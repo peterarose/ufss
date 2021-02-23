@@ -283,6 +283,18 @@ class DiagramGenerator(DiagramDrawer):
         wavefunction_instructions = self.convert_rho_instructions_list_to_psi_instructions_list(rho_instructions_list)
         return wavefunction_instructions
 
+    def get_diagram_final_state(self,diagram):
+        """Returns ket and bra manifold indices after all diagram interactions
+        Args:
+            diagram (list) : list of ordered interactions
+        Returns: list with the first entry the ket manifold index, and 
+            the second entry the bra manifold index
+"""
+        rho_manifold = np.array([0,0],dtype='int')
+        for ins,pulse_num in diagram:
+            rho_manifold += self.instruction_to_manifold_transition[ins]
+        return list(rho_manifold)
+
     def get_diagram_excitation_manifold(self,diagram,*,number_of_interactions=2):
         rho_manifold = np.array([0,0])
         for ins,pulse_num in diagram[:number_of_interactions]:
@@ -291,6 +303,20 @@ class DiagramGenerator(DiagramDrawer):
             return rho_manifold[0]
         else:
             return None
+
+    def filter_diagrams_by_final_state(self,diagrams,state):
+        """Returns all diagrams that end in the specified state
+        Args:
+            diagrams (list) : list of diagrams to filter
+            state (list) : list with the first entry the ket manifold index, 
+                and the second entry the bra manifold index
+"""
+        new_diagrams = []
+        for diagram in diagrams:
+            diagram_state = self.get_diagram_final_state(diagram)
+            if diagram_state == state:
+                new_diagrams.append(diagram)
+        return new_diagrams
 
     def filter_diagrams_by_excitation_manifold(self,diagrams,*,manifold=1,number_of_interactions=2):
         new_diagrams = []
