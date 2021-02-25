@@ -161,7 +161,20 @@ class DiagramGenerator(DiagramDrawer):
             new_list = [self.interaction_tuple_to_str(el) for el in interaction_list]
 
         self.efield_wavevectors = new_list
-            
+        self.set_pdc()
+
+    def set_pdc(self):
+        num_pulses = len(self.efield_wavevectors)
+        pdc = np.zeros((num_pulses,2),dtype='int')
+        for i in range(num_pulses):
+            for j in range(len(self.efield_wavevectors[i])):
+                if self.efield_wavevectors[i][j] == '+':
+                    pdc[i,0] += 1
+                elif self.efield_wavevectors[i][j] == '-':
+                    pdc[i,1] += 1
+                else:
+                    raise Exception('Could not set phase-discrimination condition')
+        self.pdc = pdc
 
     def polarization_detection_filter_instructions(self,instructions):
         rho_manifold = np.array([0,0])
