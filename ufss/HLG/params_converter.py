@@ -5,48 +5,6 @@ import copy
 import shutil
 import math
 
-# def convert_simple_dict(vib_dict,*,halfway_basis=True):
-#     new_vib_dict = copy.deepcopy(vib_dict)
-#     d = vib_dict['displacement']
-#     try:
-#         alpha = vib_dict['alpha']
-#     except KeyError:
-#         alpha = 1
-#     p0 = [1]
-#     p1 = [alpha**2]
-#     k0 = [1]
-#     k1 = [1]
-#     try:
-#         l = vib_dict['reorganization']
-#     except KeyError:
-#         l = -alpha**2 * d**2
-
-#     new_d = d*alpha**(1/4)/2
-    
-#     if halfway_basis:
-#         k_modifier = [alpha**(i/4) for i in range(2,len(k0)+2)]
-#         p_modifier = [alpha**(-i/4) for i in range(2,len(p0)+2)]
-#     else:
-#         k_modifier = [1 for i in range(2,len(k0)+2)]
-#         p_modifier = [1 for i in range(2,len(p0)+2)]
-        
-#     new_k0 = [a*b for a,b in zip(k0,k_modifier)]
-#     new_k1 = [a*b for a,b in zip(k1,k_modifier)]
-    
-#     new_p0 = [a*b for a,b in zip(p0,p_modifier)]
-#     new_p1 = [a*b for a,b in zip(p1,p_modifier)]
-
-#     new_vib_dict['reorganization'] = [0,l]
-#     new_vib_dict['kinetic'] = [new_k0,new_k1]
-#     new_vib_dict['potential'] = [new_p0,new_p1]
-
-#     if halfway_basis:
-#         new_vib_dict['displacement'] = [-new_d,new_d]
-#     else:
-#         new_vib_dict['displacement'] = [0,d]
-
-#     return new_vib_dict
-
 def convert_general_dict(vib_dict,*,halfway_basis=True):
     new_vib_dict = copy.deepcopy(vib_dict)
     d = vib_dict['displacement']
@@ -57,13 +15,14 @@ def convert_general_dict(vib_dict,*,halfway_basis=True):
         p0,p1 = vib_dict['potential']
         alpha = (p1[0]/p0[0])**(1/2)
     except KeyError:
-        p0 = [1]
-        p1 = [1]
         try:
             alpha = vib_dict['alpha']
             new_vib_dict.pop('alpha')
         except KeyError:
             alpha = 1
+        p0 = [1]
+        p1 = [alpha**2]
+        
     try:
         k0,k1 = vib_dict['kinetic']
     except KeyError:
