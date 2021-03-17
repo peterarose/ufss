@@ -1499,8 +1499,13 @@ alias transitions onto nonzero electric field amplitudes.
         
         e_dt = efield_t[1] - efield_t[0]
         dt = self.t[1] - self.t[0]
-            
-        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
+
+        if e_dt > dt:
+            raise Exception("""Local oscillator dt is too large for desired 
+                signal detection bandwidth.  You must either use method
+                set_t with a larger dt, or supply local oscillator with 
+                smaller value of dt""")
+        elif (np.isclose(e_dt,dt) and efield_t[-1] >= self.t[-1]):
             full_efield = np.zeros(self.t.size,dtype='complex')
 
             # the local oscillator sets the "zero" on the clock
@@ -1512,6 +1517,11 @@ alias transitions onto nonzero electric field amplitudes.
             t_slice = slice(pulse_start_ind, pulse_end_ind,None)
             
             full_efield[t_slice] = efield
+            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+        elif efield_t[-1] > self.t[-1]:
+            f = sinterp1d(efield_t,efield,fill_value = (0,0),bounds_error=False,
+                          kind='linear')
+            full_efield = f(self.t)
             efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
         else:
             efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
