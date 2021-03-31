@@ -47,7 +47,7 @@ numpy, matplotlib, pyfftw, scipy>=1, pyyaml, pyx
 
 To get started with this code, clone this repo and have a look at the four jupyter notebooks contained within. They give examples of working with the diagram generator and generating spectroscopic signals. They also show how to generate figures in the manuscripts describing UFSS.
 
-[1] Peter A. Rose and Jacob J. Krich, "Automatic Feynman diagram generation for nonlinear optical spectroscopies", [J. Chem. Phys. 154, 034109 (2021)](https://doi.org/10.1063/5.0024105)
+[1] Peter A. Rose and Jacob J. Krich, "Automatic Feynman diagram generation for nonlinear optical spectroscopies and application to fifth-order spectroscopy with pulse overlaps", [J. Chem. Phys. 154, 034109 (2021)](https://doi.org/10.1063/5.0024105)
 
 
 [2] Peter A. Rose and Jacob J. Krich, "Efficient numerical method for predicting nonlinear optical spectroscopies of open systems", [J. Chem. Phys. 154, 034108 (2021)](https://doi.org/10.1063/5.0024104)
