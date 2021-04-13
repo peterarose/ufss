@@ -299,19 +299,15 @@ class Polymer:
         ### Operators that define a single two-level system (2LS)
         self.N = 2 # one of the key ingedients that makes this a 2LS
 
-        self.up = np.zeros((2,2))
-        self.up[1,0] = 1
+        self.up = self.basis(1,0)
 
-        self.down = np.zeros((2,2))
-        self.down[0,1] = 1
+        self.down = self.basis(0,1)
 
-        self.ii = np.eye(2)
+        self.ii = np.eye(self.N)
 
-        self.occupied = np.zeros((2,2))
-        self.occupied[1,1] = 1
+        self.occupied = self.basis(1,1)
 
-        self.empty = np.zeros((2,2))
-        self.empty[0,0] = 1
+        self.empty = self.basis(0,0)
 
         ### Kron up the single 2LS operators to act on the full Hilbert space of the polymer
 
@@ -333,23 +329,49 @@ class Polymer:
 
         self.set_manifold_eigensystems()
         self.set_electronic_eigensystem()
+        
+
+    def basis(self,row,col):
+        """Matrix basis for a single two-level system
+"""
+        b = np.zeros((self.N,self.N))
+        b[row,col] = 1
+        return b
 
     ### Tools for making the basic operators in the polymer space
 
     def electronic_identity_kron(self,element_list):
-        """Takes in a list of tuples (element, position)
+        """Takes in a list of tuples (element, position) and krons
+            them up into the full space (element is assumed to be
+            a 2x2 array acting on a single 2LS.  Any positions that
+            are unspecified are assumed to be identities
+        Args:
+            element_list (list): list of tuples
+
+        Returns:
+            2^n x 2^n array acting on the full space of the polymer
 """
+        # all unspecified positions will be taken to be identities
         num_identities = self.num_sites - len(element_list)
         if num_identities < 0:
+            # cannot have more operators than 2LS's
             raise ValueError('Too many elements for Hilbert space')
-
+        # create a list of all identities
         matrix_list = [self.ii for j in range(self.num_sites)]
 
         for el, pos in element_list:
+            # for each position specified, replace identity in
+            # matrix_list with element
             matrix_list[pos] = el
         return self.recursive_kron(matrix_list)
 
     def recursive_kron(self,list_of_matrices):
+        """Krons together a list of matrices
+        Args:
+            list_of_matrices (list): list of np.ndarrays
+        Returns:
+            the kronecker product of all the input matrices
+"""
         mat = list_of_matrices.pop(0)
         n = len(list_of_matrices)
         for next_item in list_of_matrices:
@@ -463,7 +485,7 @@ class Polymer:
         return self.coherence_to_full(O,manifold_num,manifold_num)
 
     def extract_electronic_subspace(self,O,min_occ_num,max_occ_num):
-        """Projects operator into the given electronic excitation manifold
+        """Projects operator into the given electronic excitation manifold(s)
 """
         manifold_inds = self.electronic_subspace_mask(min_occ_num,max_occ_num)
         O = O[manifold_inds,:]
@@ -492,6 +514,9 @@ class Polymer:
             return self.electronic_hamiltonian
         else:
             return self.extract_manifold(self.electronic_hamiltonian,manifold_num)
+    
+
+    ### Tools for diagonalizing the Hamiltonian
 
     def make_manifold_eigensystem(self,manifold_num):
         h = self.get_electronic_hamiltonian(manifold_num = manifold_num)
@@ -532,6 +557,7 @@ class Polymer:
 
         self.electronic_eigenvectors = eigvecs
         self.electronic_eigenvalues = d.diagonal()
+    
 
     ### Tools for making the dipole operator
         
@@ -696,6 +722,17 @@ class PolymerVibrations():
 
         self.total_hamiltonian = self.total_hamiltonian + self.vibrational_hamiltonian
 
+    def add_linear_couplings(self):
+        self.linear_coupling_hamiltonian = np.zeros(self.total_hamiltonian.shape)
+
+        for i in range(self.num_vibrations):
+            try:
+                coupling_list = self.params['vibrations'][i]['linear_couplings']
+                self.linear_coupling_hamiltonian += self.linear_site_vibrational_couplings(i,manifold_num)
+            except KeyError:
+                pass
+        self.total_hamiltonian = self.total_hamiltonian + self.linear_coupling_hamiltonian
+
     def set_vibrations(self):
         vibration_params = self.params['vibrations']
         # Vibrations in the ground manifold are assumed to be diagonal
@@ -759,6 +796,31 @@ class PolymerVibrations():
         O = O[inds[0]]
         O = O.transpose()
         return O
+
+    def linear_site_vibrational_couplings(self,mode_num):
+        mode_dict = self.params['vibrations'][mode_num]
+        coupling_list = mode_dict['linear_couplings']
+        coupling_strength, site_index_pair = coupling_list[0]
+        vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num)
+        coupling_ham =  vib_coupling * coupling_strength
+        
+        for i in range(1,len(coupling_list)):
+            coupling_strength, site_index_pair = coupling_list[i]
+            vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num,manifold_num)
+            coupling_ham +=  vib_coupling * coupling_strength
+        return coupling_ham
+    
+    def single_linear_site_vibration_coupling(self,site_index_pair,mode_num,manifold_num):
+        electronic_matrix = self.site_basis(0,manifold_num)
+        electronic_matrix[:,:] = 0
+        i,j = site_index_pair
+        electronic_matrix[i,j] = 1
+        electronic_matrix[j,i] = 1
+
+        x = LadderOperators(self.truncation_size).x
+        x = x[:self.truncation_size,:self.truncation_size]
+        vib_coupling = self.vibration_identity_kron(mode_num,x,manifold_num)
+        return kron(electronic_matrix,vib_coupling)
 
     def vibration_identity_kron(self,position,item):
         """Takes in a single vibrational hamiltonians and krons it with the correct 
@@ -1019,3 +1081,16 @@ class DiagonalizeHamiltonian:
         mu_save_name = os.path.join(self.save_path,'mu.npz')
         np.savez(mu_save_name,**self.mu_eigen_basis)
         return None
+
+
+def SHO_basis(n,xvalues):
+    coef = [0 for i in range(n)]
+    coef.append(1)
+    norm = 1/(np.pi**(1/4)*2**(n/2) * np.sqrt(factorial(n)))
+    return  norm * np.exp(-xvalues**2/2) * hermval(xvalues,coef)
+
+def oscillator_1d(array_1d,x):
+    ans = np.zeros(x.shape,dtype=array_1d.dtype)
+    for i in range(len(array_1d)):
+        ans += SHO_basis(i,x) * array_1d[i]
+    return ans
