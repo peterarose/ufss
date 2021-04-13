@@ -6,357 +6,17 @@ from scipy.sparse.linalg import eigs, eigsh
 import itertools
 from scipy.linalg import block_diag, eig, expm, eigh
 from scipy.sparse import save_npz, load_npz, csr_matrix, csc_matrix
+import scipy.sparse as sp
+from scipy.special import binom
 import yaml
 import copy
 import warnings
 import os
 import time
 
-from .eigenstates import AnharmonicDisplaced
+from .Hamiltonians import DisplacedAnharmonicOscillator, PolymerVibrations, Polymer, DiagonalizeHamiltonian, LadderOperators
 
-class Polymer:
-
-    def __init__(self,site_energies,site_couplings,dipoles):
-        """This initializes an object with an arbitrary number of
-        coupled two-level systems
-
-        site_energies - list of excitation energies of individual sites
-
-        site_couplings - list of energetic couplings between singly-excited electronic 
-        states in the site basis, for example [J12,J13,...,J1N,J23,...,J2N,...]
-"""
-        self.num_sites = len(site_energies)
-        self.energies = site_energies
-        self.couplings = site_couplings
-        self.dipoles = dipoles
-        self.pols = ['x','y','z']
-
-        ### Operators that define a single two-level system (2LS)
-        self.N = 2 # one of the key ingedients that makes this a 2LS
-
-        self.up = np.zeros((2,2))
-        self.up[1,0] = 1
-
-        self.down = np.zeros((2,2))
-        self.down[0,1] = 1
-
-        self.ii = np.eye(2)
-
-        self.occupied = np.zeros((2,2))
-        self.occupied[1,1] = 1
-
-        self.empty = np.zeros((2,2))
-        self.empty[0,0] = 1
-
-        ### Kron up the single 2LS operators to act on the full Hilbert space of the polymer
-
-        self.set_up_list()
-        self.set_down_list()
-        self.set_occupied_list()
-        self.set_empty_list()
-        self.set_exchange_list()
-
-        ### Make Hamiltonian (total and by manifold)
-        
-        self.set_electronic_hamiltonian()
-        self.set_electronic_total_occupation_number()
-
-        self.make_mu_dict_site_basis()
-        self.make_mu_site_basis('x')
-        self.make_mu_up_dict_site_basis()
-        self.make_mu_up_site_basis('x')
-
-        self.set_manifold_eigensystems()
-        self.set_electronic_eigensystem()
-
-    ### Tools for making the basic operators in the polymer space
-
-    def electronic_identity_kron(self,element_list):
-        """Takes in a list of tuples (element, position)
-"""
-        num_identities = self.num_sites - len(element_list)
-        if num_identities < 0:
-            raise ValueError('Too many elements for Hilbert space')
-
-        matrix_list = [self.ii for j in range(self.num_sites)]
-
-        for el, pos in element_list:
-            matrix_list[pos] = el
-        return self.recursive_kron(matrix_list)
-
-    def recursive_kron(self,list_of_matrices):
-        mat = list_of_matrices.pop(0)
-        n = len(list_of_matrices)
-        for next_item in list_of_matrices:
-            mat = np.kron(mat,next_item)
-        return mat
-
-    def make_single_operator_list(self,O):
-        """Make a list of full-space operators for a given 2x2 operator,
-            by taking tensor product with identities on the other 
-            excitations
-"""
-        O_list = []
-        for i in range(self.num_sites):
-            Oi = self.electronic_identity_kron([(O,i)])
-            O_list.append(Oi)
-        return O_list
-
-    def make_multi_operator_list(self,o_list):
-        """Make a list of full-space operators for a given set of 2x2 
-            operators by inserting the necessary identities
-"""
-        O_list = []
-        positions = itertools.combinations(range(self.num_sites),len(o_list))
-        for pos_tuple in positions:
-            Oi = self.electronic_identity_kron(list(zip(o_list,pos_tuple)))
-            O_list.append(Oi)
-        return O_list
-
-    def set_occupied_list(self):
-        self.occupied_list = self.make_single_operator_list(self.occupied)
-
-    def set_up_list(self):
-        self.up_list = self.make_single_operator_list(self.up)
-
-    def set_down_list(self):
-        self.down_list = self.make_single_operator_list(self.down)
-
-    def set_empty_list(self):
-        self.empty_list = self.make_single_operator_list(self.empty)
-    
-    def set_exchange_list(self):
-        self.exchange_list = self.make_multi_operator_list([self.up,self.down])
-
-    ### Tools for moving back and forth between full Hamiltonian and manifold(s)
-
-    def electronic_vector_of_ones_kron(self,position,item):
-        n = self.num_sites
-        ones_list = [np.ones(self.N) for i in range(n-1)]
-        ones_list.insert(position,item)
-        vec = ones_list.pop(0)
-        for next_item in ones_list:
-            vec = np.kron(vec,next_item)
-        return vec
-
-    def set_electronic_total_occupation_number(self):
-        n = self.num_sites
-        single_mode_occ = np.arange(self.N)
-        occ_num = self.electronic_vector_of_ones_kron(0,single_mode_occ)
-        for i in range(1,n):
-            occ_num += self.electronic_vector_of_ones_kron(i,single_mode_occ)
-        self.electronic_total_occupation_number = occ_num
-
-    def electronic_manifold_mask(self,manifold_num):
-        """Creates a boolean mask to describe which states obey the truncation
-           size collectively
-"""
-        manifold_inds = np.where(self.electronic_total_occupation_number == manifold_num)[0]
-        return manifold_inds
-
-    def electronic_subspace_mask(self,min_occ_num,max_occ_num):
-        """Creates a boolean mask to describe which states obey the range of 
-            electronic occupation collectively
-"""
-        manifold_inds = np.where((self.electronic_total_occupation_number >= min_occ_num) &
-                                 (self.electronic_total_occupation_number <= max_occ_num))[0]
-        return manifold_inds
-
-    def extract_coherence(self,O,manifold1,manifold2):
-        """Returns result of projecting the Operator O onto manifold1
-            on the left and manifold2 on the right
-"""
-        manifold1_inds = self.electronic_manifold_mask(manifold1)
-        manifold2_inds = self.electronic_manifold_mask(manifold2)
-        O = O[manifold1_inds,:]
-        O = O[:,manifold2_inds]
-        return O
-    
-    def extract_manifold(self,O,manifold_num):
-        """Projects operator into the given electronic excitation manifold
-"""
-        return self.extract_coherence(O,manifold_num,manifold_num)
-
-    def coherence_to_full(self,O,manifold1,manifold2):
-        """Creates an array of zeros of the size of the full Hilbert space,
-            and fills the correct entries with the operator O existing in
-            a particular optical coherence between manifolds
-"""
-        Ofull = np.zeros(self.electronic_hamiltonian.shape,dtype=O.dtype)
-        manifold1_inds = self.electronic_manifold_mask(manifold1)
-        manifold2_inds = self.electronic_manifold_mask(manifold2)
-        for i in range(manifold2_inds.size):
-            ind = manifold2_inds[i]
-            Ofull[manifold1_inds,ind] = O[:,i]
-        return Ofull
-    
-    def manifold_to_full(self,O,manifold_num):
-        """Creates an array of zeros of the size of the full Hilbert space,
-            and fills the correct entries with the operator O existing in
-            a single optical manifold
-"""
-        return self.coherence_to_full(O,manifold_num,manifold_num)
-
-    def extract_electronic_subspace(self,O,min_occ_num,max_occ_num):
-        """Projects operator into the given electronic excitation manifold
-"""
-        manifold_inds = self.electronic_subspace_mask(min_occ_num,max_occ_num)
-        O = O[manifold_inds,:]
-        O = O[:,manifold_inds]
-        return O
-
-    
-    ### Tools for making the Hamiltonian
-
-    def make_electronic_hamiltonian(self):
-        ham = self.energies[0] * self.occupied_list[0]
-        for i in range(1,self.num_sites):
-            ham += self.energies[i] * self.occupied_list[i]
-
-        for i in range(len(self.exchange_list)):
-            ham += self.couplings[i] * self.exchange_list[i]
-            ham += np.conjugate(self.couplings[i]) * self.exchange_list[i].T
-
-        return ham
-
-    def set_electronic_hamiltonian(self):
-        self.electronic_hamiltonian = self.make_electronic_hamiltonian()
-
-    def get_electronic_hamiltonian(self,*,manifold_num = 'all'):
-        if manifold_num == 'all':
-            return self.electronic_hamiltonian
-        else:
-            return self.extract_manifold(self.electronic_hamiltonian,manifold_num)
-
-    def make_manifold_eigensystem(self,manifold_num):
-        h = self.get_electronic_hamiltonian(manifold_num = manifold_num)
-        e, v = np.linalg.eigh(h)
-        sort_inds = e.argsort()
-        e = e[sort_inds]
-        v = v[:,sort_inds]
-        return e,v
-
-    def set_manifold_eigensystems(self):
-        self.electronic_eigenvalues_by_manifold = []
-        self.electronic_eigenvectors_by_manifold = []
-        for i in range(self.num_sites+1):
-            e,v = self.make_manifold_eigensystem(i)
-            self.electronic_eigenvalues_by_manifold.append(e)
-            self.electronic_eigenvectors_by_manifold.append(v)
-
-    def get_eigensystem_by_manifold(self,manifold_num):
-        e = self.electronic_eigenvalues_by_manifold[manifold_num]
-        v = self.electronic_eigenvectors_by_manifold[manifold_num]
-        return e,v
-
-    def set_electronic_eigensystem(self):
-        H = self.electronic_hamiltonian
-        eigvecs = np.zeros(H.shape)
-        d = np.zeros(H.shape)
-        for i in range(self.num_sites+1):
-            e,v = self.get_eigensystem_by_manifold(i)
-            if i ==1:
-                self.exciton_energies = e
-            eigvecs += self.manifold_to_full(v,i)
-            d += self.manifold_to_full(np.diag(e),i)
-        Hd = eigvecs.T.dot(H.dot(eigvecs))
-        if np.allclose(Hd,d):
-            pass
-        else:
-            raise Exception('Diagonalization by manifold failed')
-
-        self.electronic_eigenvectors = eigvecs
-        self.electronic_eigenvalues = d.diagonal()
-
-    ### Tools for making the dipole operator
-        
-    def make_mu_site_basis(self,pol):
-        pol_dict = {'x':0,'y':1,'z':2}
-        d = self.dipoles[:,pol_dict[pol]]
-        self.mu = d[0]*(self.up_list[0] + self.down_list[0])
-        for i in range(1,len(self.up_list)):
-            self.mu += d[i]*(self.up_list[i] + self.down_list[i])
-
-    def make_mu_dict_site_basis(self):
-        self.mu_dict = dict()
-        for pol in self.pols:
-            self.make_mu_site_basis(pol)
-            self.mu_dict[pol] = self.mu.copy()
-
-    def make_mu_up_site_basis(self,pol):
-        pol_dict = {'x':0,'y':1,'z':2}
-        d = self.dipoles[:,pol_dict[pol]]
-        self.mu_ket_up = self.up_list[0].copy()
-        for i in range(1,len(self.up_list)):
-            self.mu_ket_up += self.up_list[i]
-
-    def make_mu_up_dict_site_basis(self):
-        self.mu_up_dict = dict()
-        for pol in self.pols:
-            self.make_mu_up_site_basis(pol)
-            self.mu_up_dict[pol] = self.mu_ket_up.copy()
-
-            
-
-class LindbladConstructor:
-
-    @staticmethod
-    def make_Lindblad_instructions(gamma,O):
-        """O must be square
-"""
-        II = np.eye(O.shape[0])
-        Od = np.conjugate(O.T)
-        leftright = gamma * (-np.dot(Od,O)/2)
-        return [(gamma*O,Od),(leftright,II),(II,leftright)]
-
-    @staticmethod
-    def make_Lindblad_instructions2(gamma,Oket,Obra):
-        IIket = np.eye(Oket.shape[0])
-        IIbra = np.eye(Obra.shape[0])
-        Oketd = np.conjugate(Oket.T)
-        Obrad = np.conjugate(Obra.T)
-        left = gamma * (-np.dot(Oketd,Oket)/2)
-        right = gamma * (-np.dot(Obrad,Obra)/2)
-        return [(gamma*Oket,Obrad),(left,IIbra),(IIket,right)]
-
-    @staticmethod
-    def make_Lindblad_instructions2_Obra0(gamma,Oket,Obra):
-        IIbra = np.eye(Obra.shape[0])
-        Oketd = np.conjugate(Oket.T)
-        left = gamma * (-np.dot(Oketd,Oket)/2)
-        return [(left,IIbra)]
-
-    @staticmethod
-    def make_Lindblad_instructions2_Oket0(gamma,Oket,Obra):
-        IIket = np.eye(Oket.shape[0])
-        Obrad = np.conjugate(Obra.T)
-        right = gamma * (-np.dot(Obrad,Obra)/2)
-        return [(IIket,right)]
-
-class LiouvillianConstructor(LindbladConstructor):
-
-    @staticmethod
-    def make_commutator_instructions(O):
-        """O must be square
-"""
-        II = np.eye(O.shape[0])
-        return [(O,II),(II,-O)]
-
-    @staticmethod
-    def make_commutator_instructions2(Oket,Obra):
-        """
-"""
-        IIket = np.eye(Oket.shape[0])
-        IIbra = np.eye(Obra.shape[0])
-        return [(Oket,IIbra),(IIket,-Obra)]
-
-    @staticmethod
-    def make_Liouvillian(instruction_list):
-        left, right = instruction_list[0]
-        L = np.kron(left,right.T)
-        for left,right in instruction_list[1:]:
-            L = L + np.kron(left,right.T)
-        return L
+from .general_Liouvillian_classes import LiouvillianConstructor
 
 class OpenPolymer(Polymer,LiouvillianConstructor):
 
@@ -530,7 +190,10 @@ class OpenPolymer(Polymer,LiouvillianConstructor):
                 else:
                     shape = int(np.sqrt(eigvals.size))
                     trace_norm = eigvecs[:,i].reshape(shape,shape).trace()
-                    eigvecs[:,i] = eigvecs[:,i] / trace_norm
+                    if np.isclose(trace_norm,0):
+                        pass
+                    else:
+                        eigvecs[:,i] = eigvecs[:,i] / trace_norm
 
         if invert:
             eigvecs_left = np.linalg.pinv(eigvecs)
@@ -711,10 +374,10 @@ class OpenPolymer(Polymer,LiouvillianConstructor):
         np.savez(os.path.join(dirname,'mu_site_basis.npz'),ket_up=mu_ket_up_3d,bra_up=mu_bra_up_3d,
                      ket_down=mu_ket_down_3d,bra_down=mu_bra_down_3d)
 
-        
+
 
 class OpenPolymerVibrations(OpenPolymer):
-    def __init__(self,yaml_file,*,mask_by_occupation_num=True,force_detailed_balance=False,for_RK=False):
+    def __init__(self,yaml_file,*,mask_by_occupation_num=True,force_detailed_balance=False,for_RKE=False):
         """Initial set-up is the same as for the Polymer class, but I also need
 to unpack the vibrational_frequencies, which must be passed as a nested list.
 Each site may have N vibrational modes, and each has a frequency, a displacement
@@ -724,6 +387,8 @@ for sites a, b, ...
         with open(yaml_file) as yamlstream:
             params = yaml.load(yamlstream,Loader=yaml.SafeLoader)
         self.base_path = os.path.split(yaml_file)[0]
+        self.save_path = os.path.join(self.base_path,'open')
+        os.makedirs(self.save_path,exist_ok=True)
         super().__init__(params['site_energies'],params['site_couplings'],np.array(params['dipoles']))
 
         self.H_diagonalization_time = 0
@@ -751,10 +416,7 @@ for sites a, b, ...
         self.set_vibrations()
         self.set_vibrational_ladder_operators()
         
-        if self.manifolds_separable == True:
-            e_ham = self.electronic_hamiltonian
-        else:
-            e_ham = self.extract_electronic_subspace(self.electronic_hamiltonian,0,self.maximum_manifold)
+        e_ham = self.extract_electronic_subspace(self.electronic_hamiltonian,0,self.maximum_manifold)
             
         self.total_hamiltonian = np.kron(e_ham,self.vibrational_identity)
         self.add_vibrations()
@@ -786,7 +448,7 @@ for sites a, b, ...
                 self.set_L()
             self.L_construction_time = time.time() - t0
 
-        if for_RK:
+        if for_RKE:
             self.set_mu_by_manifold(H_eigentransform=H_eigentransform,L_eigentransform=False)
             self.save_mu_by_manifold(pruned=False)
             self.save_L_by_manifold()
@@ -815,7 +477,7 @@ for sites a, b, ...
         save_dict = {'H_diagonalization_time':self.H_diagonalization_time,
                      'L_diagonalization_time':self.L_diagonalization_time,
                      'L_construction_time':self.L_construction_time}
-        np.savez(os.path.join(self.base_path,'Liouvillian_timings.npz'),**save_dict)
+        np.savez(os.path.join(self.save_path,'Liouvillian_timings.npz'),**save_dict)
 
     def set_H_eigsystem_by_manifold(self):
         self.H_eigenvalues = []
@@ -851,6 +513,12 @@ for sites a, b, ...
 
         rho0 = rho0.flatten()
         np.save(os.path.join(self.base_path,'rho0.npy'),rho0)
+
+    def save_L(self):
+        save_npz(os.path.join(self.save_path,'L.npz'),csr_matrix(self.L))
+
+    def save_L_by_manifold(self):
+        np.savez(os.path.join(self.save_path,'L.npz'),**self.L_by_manifold)
             
 
     def eigfun2(self,ket_manifold_num,bra_manifold_num,*,check_eigenvectors = True):
@@ -1392,15 +1060,15 @@ gamma)"""
                 
     def save_mu_by_manifold(self,*,pruned=True):
         if pruned:
-            np.savez(os.path.join(self.base_path,'mu_pruned.npz'),**self.mu_by_manifold)
-            np.savez(os.path.join(self.base_path,'mu_boolean.npz'),**self.boolean_mu_by_manifold)
+            np.savez(os.path.join(self.save_path,'mu_pruned.npz'),**self.mu_by_manifold)
+            np.savez(os.path.join(self.save_path,'mu_boolean.npz'),**self.boolean_mu_by_manifold)
         else:
-            np.savez(os.path.join(self.base_path,'mu.npz'),**self.mu_by_manifold)
+            np.savez(os.path.join(self.save_path,'mu.npz'),**self.mu_by_manifold)
 
     def save_eigensystem_by_manifold(self):
-        np.savez(os.path.join(self.base_path,'eigenvalues.npz'),**self.eigenvalues_by_manifold)
-        np.savez(os.path.join(self.base_path,'right_eigenvectors.npz'),**self.right_eigenvectors_by_manifold)
-        np.savez(os.path.join(self.base_path,'left_eigenvectors.npz'),**self.left_eigenvectors_by_manifold)
+        np.savez(os.path.join(self.save_path,'eigenvalues.npz'),**self.eigenvalues_by_manifold)
+        np.savez(os.path.join(self.save_path,'right_eigenvectors.npz'),**self.right_eigenvectors_by_manifold)
+        np.savez(os.path.join(self.save_path,'left_eigenvectors.npz'),**self.left_eigenvectors_by_manifold)
                 
     def extract_coherence_instructions_from_full_instructions(self,inst_list,manifold1,manifold2,*,H_eigentransform=False,trim = None):
         new_inst_list = []
@@ -1541,17 +1209,16 @@ gamma)"""
         d  = single_mode['displacement'][electronic_occupation]
         kin = single_mode['kinetic'][electronic_occupation]
         pot = single_mode['potential'][electronic_occupation]
-        aho = AnharmonicDisplaced(self.truncation_size)
-        aho.set_ham(lam,d,kin,pot,real=True)
+        aho = DisplacedAnharmonicOscillator(self.truncation_size)
+        aho.set_ham(lam,d,kin,pot)
         return 0.5 * w * aho.ham
 
     def construct_vibrational_ladder_operator(self,single_mode,electronic_occupation):
         """Construct ladder operator given the electronic occupation for that site"""
         w = single_mode['omega_g']
         d  = single_mode['displacement'][electronic_occupation]
-        aho = AnharmonicDisplaced(self.truncation_size)
-        aho.calculation_size = self.truncation_size
-        up = aho.create() - np.eye(self.truncation_size) * d/np.sqrt(2)
+        lad = LadderOperators(self.truncation_size,disp=d,extra_size=0)
+        up = lad.ad
         return up
 
     def set_vibrational_ladder_operators(self):
@@ -1633,4 +1300,3 @@ gamma)"""
         self.vibronic_mu_dict = dict()
         for pol in self.pols:
             self.vibronic_mu_dict[pol] =  np.kron(self.mu_dict[pol],np.eye(vib_size))
-            
