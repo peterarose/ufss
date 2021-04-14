@@ -5,6 +5,7 @@ needs to split the pump into two pulses, and the probe into two separate pulses
 
 #Standard python libraries
 import os
+import time
 
 #Dependencies
 import numpy as np
@@ -59,6 +60,8 @@ class FWMIsotropicAverage(object):
 
     def averaged_signal(self,*,return_signal=False):
 
+        t0 = time.time()
+
         left_vec = kdelvec(*self.pol)
 
         xyz = ['x','y','z']
@@ -102,13 +105,16 @@ class FWMIsotropicAverage(object):
                                 signal += weight * mol_frame_signal
 
         self.signal = signal
+
+        self.calculation_time = time.time() - t0
         if return_signal:
             return signal
 
-    def save(self,save_name,pulse_delay_names,*,use_base_path=True):
+    def save(self,save_name,pulse_delay_names=[],*,use_base_path=True):
         if save_name == 'auto':
             save_name = 'FWM_IsotropicAverage_'+''.join(self.pol)
         self.sc.signal = self.signal
+        self.sc.calculation_time = self.calculation_time
         self.sc.save(save_name,pulse_delay_names,use_base_path=use_base_path)
 
     
