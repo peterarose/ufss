@@ -163,6 +163,14 @@ class DiagramGenerator(DiagramDrawer):
         self.efield_wavevectors = new_list
         self.set_pdc()
 
+        # If pulses and/or phase discrimination are changed, these two attributes 
+        # must be reset or removed:
+        try:
+            del self.pulse_sequence
+            del self.pulse_overlap_array
+        except AttributeError:
+            pass
+
     def set_pdc(self):
         num_pulses = len(self.efield_wavevectors)
         pdc = np.zeros((num_pulses,2),dtype='int')
@@ -175,6 +183,7 @@ class DiagramGenerator(DiagramDrawer):
                 else:
                     raise Exception('Could not set phase-discrimination condition')
         self.pdc = pdc
+        self.pdc_tuple = tuple(tuple(pdc[i,:]) for i in range(pdc.shape[0]))
 
     def polarization_detection_filter_instructions(self,instructions):
         rho_manifold = np.array([0,0])
@@ -276,20 +285,63 @@ class DiagramGenerator(DiagramDrawer):
             for k in ks:
                 self.ordered_interactions.append((i,k))
 
-    def get_diagrams(self,arrival_times):
+    def check_new_diagram_conditions(self,arrival_times):
+        new = np.array(arrival_times)
+        new_pulse_sequence = np.argsort(new)
+        new_pulse_overlap_array = np.zeros((len(arrival_times),
+                                            len(arrival_times)),
+                                           dtype='bool')
+
+        intervals = self.arrival_times_to_pulse_intervals(arrival_times)
         
+        for i in range(len(arrival_times)):
+            ti = intervals[i]
+            for j in range(i+1,len(arrival_times)):
+                tj = intervals[j]
+                if ti[0] >= tj[0] and ti[0] <= tj[-1]:
+                    new_pulse_overlap_array[i,j] = True
+                elif ti[-1] >= tj[0] and ti[-1] <= tj[-1]:
+                    new_pulse_overlap_array[i,j] = True
+        try:
+            logic_statement = (np.allclose(new_pulse_overlap_array,self.pulse_overlap_array)
+                and np.allclose(new_pulse_sequence,self.pulse_sequence))
+            if logic_statement:
+                calculate_new_diagrams = False
+            else:
+                calculate_new_diagrams = True
+        except AttributeError:
+            calculate_new_diagrams = True
+        
+        self.pulse_sequence = new_pulse_sequence
+        self.pulse_overlap_array = new_pulse_overlap_array
+
+        return calculate_new_diagrams
+
+    def arrival_times_to_pulse_intervals(self,arrival_times):
         if self.detection_type == 'polarization' or self.detection_type == 'integrated_polarization':
             if len(arrival_times) == len(self.efield_wavevectors) + 1:
                 # If the arrival time of the local oscillator was included in the list arrival_times,
                 # remove it, it is not relevant to diagram generation
                 arrival_times = arrival_times[:-1]
-        times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
+        intervals = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
+
+        return intervals
+
+    def set_diagrams(self,arrival_times):
+        intervals = self.arrival_times_to_pulse_intervals(arrival_times)
         
-        efield_permutations = self.relevant_permutations(times)
+        efield_permutations = self.relevant_permutations(intervals)
         all_instructions = []
         for perm in efield_permutations:
             all_instructions += self.instructions_from_permutation(perm)
-        return all_instructions
+        self.current_diagrams = all_instructions
+        
+
+    def get_diagrams(self,arrival_times):
+        calculate_new_diagrams = self.check_new_diagram_conditions(arrival_times)
+        if calculate_new_diagrams:
+            self.set_diagrams(arrival_times)
+        return self.current_diagrams
 
     def get_wavefunction_diagrams(self,arrival_times):
         rho_instructions_list = self.get_diagrams(arrival_times)
