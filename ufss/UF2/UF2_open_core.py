@@ -23,12 +23,13 @@ def set_identical_efields(obj):
     obj.efields = []
 
 class rho_container:
-    def __init__(self,t,rho,bool_mask,pulse_number,manifold_key,*,interp_kind='linear',
+    def __init__(self,t,rho,bool_mask,pulse_number,manifold_key,pdc,*,interp_kind='linear',
                  interp_left_fill=0):
         self.bool_mask = bool_mask
         self.pulse_number = pulse_number
         self.manifold_key = manifold_key
-        
+        self.pdc = pdc
+        self.pdc_tuple = tuple(tuple(pdc[i,:]) for i in range(pdc.shape[0]))
         
         if t.size == 1:
             self.impulsive = True
@@ -96,7 +97,9 @@ class rho_container:
 
         # the following logic is designed to speed up calculations outside of the impulsive limit
         if type(t) is np.ndarray:
-            if t[0] > self.t[-1]:
+            if t.size == 0:
+                return np.array([])
+            elif t[0] > self.t[-1]:
                 if t.size <= self.M:
                     ans = self._rho[:,-t.size:]#.copy()
                 else:
@@ -156,6 +159,10 @@ class DensityMatrices(DiagramGenerator):
         self.dipole_down_dot_product_time = 0
         self.reshape_and_sum_time = 0
 
+        self.next_order_counter = 0
+
+        self.check_for_zero_calculation = False
+
         self.sparsity_threshold = .1
 
         self.conserve_memory = conserve_memory
@@ -193,6 +200,7 @@ class DensityMatrices(DiagramGenerator):
             
         elif detection_type == 'integrated_polarization':
             self.rho_to_signal = self.integrated_polarization_detection_rho_to_signal
+            self.return_complex_signal = False
             
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
@@ -210,6 +218,7 @@ class DensityMatrices(DiagramGenerator):
         self.centers = [] #initialize empty list of pulse center frequencies
         self.efield_wavevectors = []
         self.rhos = dict()
+        self.composite_rhos = dict()
 
     def set_pulse_delays(self,all_delays):
         """Must be a list of numpy arrays, where each array is a
@@ -224,7 +233,7 @@ class DensityMatrices(DiagramGenerator):
         elif (num_delays == num_pulses - 2 and
                             (self.detection_type == 'polarization' or
                              self.detection_type == 'integrated_polarization')):
-            # If there is a local oscillator, it arrives simultaneously with the last pulse
+            # If there is a local oscillator, it arrives simultaneously with the last pulse by default
             self.all_pulse_delays.append(np.array([0]))
         elif num_delays <= num_pulses -2:
             raise Exception('There are not enough delay times')
@@ -237,14 +246,21 @@ class DensityMatrices(DiagramGenerator):
         num_pulses = len(self.efields)
 
         all_delay_combinations = list(itertools.product(*self.all_pulse_delays))
-        
+
+        # for L interacting pulses, there should be L-1 delays
         signal_shape = [delays.size for delays in self.all_pulse_delays]
         if self.detection_type == 'polarization':
             signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
-            if len(signal_shape) == 1:
-                pass
-            else:
+            
+            if len(signal_shape) == self.pdc.shape[0]:
+                # get rid of the "delay" between the last pulse and the local oscillator
                 signal_shape[-1] = self.w.size
+            elif len(signal_shape) == self.pdc.shape[0] - 1:
+                # append the shape of the polariation-detection axis
+                signal_shape.append(self.w.size)
+            else:
+                raise Exception('Cannot automatically determine final signal shape')
+                
         else:
             signal = np.zeros((len(all_delay_combinations)),dtype='complex')
 
@@ -269,20 +285,32 @@ class DensityMatrices(DiagramGenerator):
         save_dict = {'UF2_calculation_time':self.calculation_time}
         np.savez(os.path.join(self.base_path,'UF2_calculation_time.npz'),**save_dict)
         
-    def calculate_signal_all_delays(self):
+    def calculate_signal_all_delays(self,*,composite_diagrams=False):
+        if composite_diagrams:
+            calculate_signal = self.calculate_signal_composite_diagrams
+        else:
+            calculate_signal = self.calculate_signal
+        
         t0 = time.time()
         num_delays = len(self.all_pulse_delays)
         num_pulses = len(self.efields)
 
         all_delay_combinations = list(itertools.product(*self.all_pulse_delays))
-        
+
+        # for L interacting pulses, there should be L-1 delays
         signal_shape = [delays.size for delays in self.all_pulse_delays]
         if self.detection_type == 'polarization':
             signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
-            if len(signal_shape) == 1:
-                pass
-            else:
+
+            if len(signal_shape) == self.pdc.shape[0]:
+                # get rid of the "delay" between the last pulse and the local oscillator
                 signal_shape[-1] = self.w.size
+            elif len(signal_shape) == self.pdc.shape[0] - 1:
+                # append the shape of the polariation-detection axis
+                signal_shape.append(self.w.size)
+            else:
+                raise Exception('Cannot automatically determine final signal shape')
+                
         else:
             signal = np.zeros((len(all_delay_combinations)),dtype='complex')
 
@@ -293,9 +321,9 @@ class DensityMatrices(DiagramGenerator):
                 arrival_times.append(arrival_times[-1]+delay)
 
             if self.detection_type == 'polarization':
-                signal[counter,:] = self.calculate_signal(arrival_times)
+                signal[counter,:] = calculate_signal(arrival_times)
             else:
-                signal[counter] = self.calculate_signal(arrival_times)
+                signal[counter] = calculate_signal(arrival_times)
             counter += 1
 
         self.signal = signal.reshape(signal_shape)
@@ -339,6 +367,114 @@ be calculated on
         sig = self.rho_to_signal(r)
         return sig
 
+    def add_rhos(self,ra,rb):
+        """Add two density matrix objects together
+"""
+        tmin = min(ra.t[0],rb.t[0])
+        tmax = max(ra.t[-1],rb.t[-1])
+        dt = min(ra.t[1]-ra.t[0],rb.t[1]-rb.t[0])
+        t = np.arange(tmin,tmax+dt*0.9,dt)
+        rho = np.zeros((ra.bool_mask.size,t.size),dtype='complex')
+        print(ra.bool_mask)
+        print(rb.bool_mask)
+        rho[ra.bool_mask,:] = ra(t)
+        rho[rb.bool_mask,:] += rb(t)
+
+        bool_mask = np.logical_or(ra.bool_mask,rb.bool_mask)
+        rho = rho[bool_mask,:]
+
+        if ra.pulse_number == rb.pulse_number:
+            pulse_number = ra.pulse_number
+        else:
+            pulse_number = None
+
+        if ra.manifold_key != rb.manifold_key:
+            warnings.warn('Inconsistent manifolds')
+        manifold_key = ra.manifold_key
+        if not np.allclose(ra.pdc,rb.pdc):
+            raise Exception('Cannot add density matrices with different phase-discrimination conditions')
+        pdc = ra.pdc
+        
+        rab = rho_container(t,rho,bool_mask,pulse_number,manifold_key,pdc)
+        return rab
+        
+    def execute_composite_diagrams(self):
+        self.check_for_zero_calculation = True
+        self.set_ordered_interactions()
+        interactions = set(self.ordered_interactions)
+        rhos = self.composite_rhos
+        old_rhos = [self.rho0]
+            
+        for i in range(len(self.ordered_interactions)):
+            new_rhos = []
+            pdcs = set()
+            for pulse_num, pm_flag in interactions:
+                for old_rho in old_rhos:
+                    output_pdc = self.get_output_pdc(old_rho.pdc,pulse_num,pm_flag)
+
+                    # exclude cases with too many interactions with the same pulse
+                    if np.all(self.pdc - output_pdc >= 0):
+
+                        # Check to see if pulses overlap or are correctly ordered
+                        remaining_pdc = self.pdc - output_pdc
+                        remaining_pulse_interactions = np.sum(remaining_pdc,axis=1)
+                        remaining_pulses = np.zeros(remaining_pulse_interactions.shape,dtype='bool')
+                        remaining_pulses[:] = remaining_pulse_interactions
+
+                        output_t = self.efield_times[pulse_num] + self.pulse_times[pulse_num]
+                        output_t0 = output_t[0]
+                        add_flag = True
+                        for i in range(remaining_pulses.size):
+                            if remaining_pulses[i]:
+                                test_t = self.efield_times[i] + self.pulse_times[i]
+                                if test_t[-1] < output_t0:
+                                    add_flag = False
+                        
+                        if add_flag:
+                            pdcs.add(tuple(tuple(output_pdc[i,:]) for i in range(output_pdc.shape[0])))
+                    
+                    ket_key,bra_key = self.wavevector_dict[pm_flag]
+                    new_rho_k = self.KB_dict[ket_key](old_rho,pulse_number=pulse_num)
+                    new_rho_b = self.KB_dict[bra_key](old_rho,pulse_number=pulse_num)
+                    if new_rho_k != None:
+                        new_rhos.append(new_rho_k)
+                    if new_rho_b != None:
+                        new_rhos.append(new_rho_b)
+            
+            for new_rho in new_rhos:
+                if new_rho.pdc_tuple in rhos.keys():
+                    partial_rho = rhos[new_rho.pdc_tuple]
+                    new_rho = self.add_rhos(partial_rho,new_rho)
+                rhos[new_rho.pdc_tuple] = new_rho
+
+            old_rhos = [rhos[pdc] for pdc in pdcs]
+
+        self.check_for_zero_calculation = False
+        
+        rho = rhos[self.pdc_tuple]
+        # print(rhos.keys())
+        sig = self.rho_to_signal(rho)
+        return sig
+
+    def calculate_signal_composite_diagrams(self,arrival_times):
+        try:
+            old_pulse_times = self.pulse_times
+            for i in range(len(old_pulse_times)):
+                if old_pulse_times[i] != arrival_times[i]:
+                    try:
+                        self.remove_composite_rhos_by_pulse_number(i)
+                    except IndexError:
+                        pass
+        except AttributeError:
+            pass
+        
+        self.pulse_times = arrival_times
+        t0 = time.time()
+        
+        signal = self.execute_composite_diagrams()
+        
+        return signal
+
     def remove_rhos_by_pulse_number(self,pulse_number):
         num = str(pulse_number)
         keys = self.rhos.keys()
@@ -349,6 +485,16 @@ be calculated on
                 keys_to_remove.append(key)
         for key in keys_to_remove:
             self.rhos.pop(key)
+
+    def remove_composite_rhos_by_pulse_number(self,pulse_number):
+        keys = self.composite_rhos.keys()
+        keys_to_remove = []
+        for key in keys:
+            ket_ints,bra_ints = key[pulse_number]
+            if ket_ints > 0 or bra_ints > 0:
+                keys_to_remove.append(key)
+        for key in keys_to_remove:
+            self.composite_rhos.pop(key)
 
     def set_identical_gaussians(self,sigma_t,c,phase_discrimination):
         """
@@ -365,14 +511,10 @@ be calculated on
         self.set_efields(times,efields,centers,phase_discrimination,
                          reset_rhos = True,plot_fields = False)
 
-    def set_current_diagram_instructions(self,times):
+    def set_current_diagram_instructions(self,arrival_times):
         self.diagram_generation_counter += 1
         t0a = time.time()
-        efield_permutations = self.relevant_permutations(times)
-        diagram_instructions = []
-        for perm in efield_permutations:
-            diagram_instructions += self.instructions_from_permutation(perm)
-        self.current_instructions = diagram_instructions
+        self.current_instructions = self.get_diagrams(arrival_times)
         t0b = time.time()
         self.diagram_generation_time = t0b - t0a
 
@@ -387,39 +529,12 @@ be calculated on
             pass
         
         self.pulse_times = arrival_times
-        if self.detection_type == 'polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'integrated_polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
 
-        new = np.array(arrival_times)
-        new_pulse_sequence = np.argsort(new)
-        new_pulse_overlap_array = np.zeros((len(times),len(times)),dtype='bool')
-        for i in range(len(times)):
-            ti = times[i]
-            for j in range(i+1,len(times)):
-                tj = times[j]
-                if ti[0] >= tj[0] and ti[0] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
-                elif ti[-1] >= tj[0] and ti[-1] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
-        try:
-            logic_statement = (np.allclose(new_pulse_overlap_array,self.pulse_overlap_array)
-                and np.allclose(new_pulse_sequence,self.pulse_sequence))
-            # logic_statement = False
-            if logic_statement:
-                pass
-            else:
-                self.set_current_diagram_instructions(times)
-        except:
-            self.set_current_diagram_instructions(times)
+        self.set_current_diagram_instructions(arrival_times)
 
         t1 = time.time()
         
         if len(self.current_instructions) == 0:
-            # print('No diagrams for arrival times ',arrival_times)
             signal = 0
         else:
             instructions = self.current_instructions[0]
@@ -427,13 +542,11 @@ be calculated on
             for instructions in self.current_instructions[1:]:
                 signal += self.execute_diagram(instructions)
 
-
         t2 = time.time()
         self.automation_time += t1-t0
         self.diagram_to_signal_time += t2-t1
 
-        self.pulse_sequence = new_pulse_sequence
-        self.pulse_overlap_array = new_pulse_overlap_array
+        
         return signal
 
     def calculate_diagrams(self,diagram_instructions,arrival_times):
@@ -478,14 +591,6 @@ be calculated on
     #     signal = np.dot(np.diagonal(rho),fluorescence_yield)
         
     #     return signal
-
-    def interpolate_rho(self,t,rho,kind='cubic',left_fill=0):
-        """Interpolates density matrix at given inputs, and pads using 0 to the left
-            and rho[-1] to the right
-"""
-        left_fill = np.ones(rho.shape[0],dtype='complex')*left_fill
-        right_fill = rho[:,-1]
-        return sinterp1d(t,rho,fill_value = (left_fill,right_fill),assume_sorted=True,bounds_error=False,kind=kind)
 
     def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_rhos = True,
                     plot_fields = False):
@@ -622,10 +727,10 @@ be calculated on
             warnings.warn('Could not automatically determine the initial thermal state. User must specify the initial condition, rho^(0), manually')
             return None
 
-        
+        pdc = np.zeros(self.pdc.shape,dtype=self.pdc.dtype)
 
-        self.rho0 = rho_container(t,rho0,bool_mask,None,'00',interp_kind='zero',
-                                  interp_left_fill=1)
+        self.rho0 = rho_container(t,rho0,bool_mask,None,'00',pdc,
+                                  interp_kind='zero',interp_left_fill=1)
 
     def set_rho0_manual_L_eigenbasis(self,manifold_key,bool_mask,weights):
         """
@@ -639,8 +744,10 @@ be calculated on
         if manifold_key == 'all_manifolds':
             manifold_key = '00'
 
-        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,interp_kind='zero',
-                                  interp_left_fill=1)
+        pdc = np.zeros(self.pdc.shape,dtype=self.pdc.dtype)
+
+        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,pdc,
+                                  interp_kind='zero',interp_left_fill=1)
 
     def set_rho0_manual(self,rho0,*,manifold_key = 'all_manifolds'):
         """Set the initial condition.  Must be done after setting the pulse shapes
@@ -675,8 +782,10 @@ be calculated on
         if manifold_key == 'all_manifolds':
             manifold_key = '00'
 
-        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,interp_kind='zero',
-                                  interp_left_fill=1)
+        pdc = np.zeros(self.pdc.shape,dtype=self.pdc.dtype)
+
+        self.rho0 = rho_container(t,rho0,bool_mask,None,manifold_key,pdc,
+                                  interp_kind='zero',interp_left_fill=1)
 
     def get_closest_index_and_value(self,value,array):
         """Given an array and a desired value, finds the closest actual value
@@ -803,7 +912,9 @@ energy singly-excited state should be set to 0
         """Sets the sequences used for either parallel or crossed pump and probe
         
         Args:
-            polarization_list (list): list of strings, can be 'x','y', or 'z' for linear polarizations or 'r' and 'l' for right and left circularly polarized light, respectively
+            polarization_list (list): list of strings, can be 'x','y', or 
+                'z' for linear polarizations or 'r' and 'l' for right and 
+                left circularly polarized light, respectively
         Returns:
             None: sets the attribute polarization sequence
 """
@@ -960,6 +1071,17 @@ alias transitions onto nonzero electric field amplitudes.
         if manifold.size != 2 or manifold.dtype != int:
             raise Exception('manifold array must contain exactly 2 integer') 
         return str(manifold[0]) + str(manifold[1])
+
+    def get_output_pdc(self,input_pdc,pulse_number,pm_flag):
+        output_pdc = input_pdc.copy()
+        if pm_flag == '+':
+            output_pdc[pulse_number,0] += 1
+        elif pm_flag == '-':
+            output_pdc[pulse_number,1] += 1
+        else:
+            raise Exception('Cannot parse pm_flag')
+
+        return output_pdc
     
     def next_order(self,rho_in,*,ket_flag=True,up_flag=True,
                    new_manifold_mask = None,pulse_number = 0):
@@ -974,6 +1096,13 @@ alias transitions onto nonzero electric field amplitudes.
         Return:
             rho_dict (rho_container): next-order density matrix
 """
+        if ket_flag == up_flag:
+            # Rotating term excites the ket and de-excites the bra
+            conjugate_flag = False
+        else:
+            # Counter-rotating term
+            conjugate_flag = True
+            
         pulse_time = self.pulse_times[pulse_number]
         t = self.efield_times[pulse_number] + pulse_time
         dt = self.dts[pulse_number]
@@ -988,15 +1117,44 @@ alias transitions onto nonzero electric field amplitudes.
             manifold_change = np.array([0,change],dtype=int)
         old_manifold = self.manifold_key_to_array(old_manifold_key)
         new_manifold = old_manifold + manifold_change
+
+        input_pdc = rho_in.pdc
+        output_pdc = input_pdc.copy()
+        if conjugate_flag:
+            output_pdc[pulse_number][1] += 1
+        else:
+            output_pdc[pulse_number][0] += 1
+
+        if self.check_for_zero_calculation:
+            output_pdc_tuple = tuple(tuple(output_pdc[i,:]) for i in range(output_pdc.shape[0]))
+            # print('Testing',output_pdc_tuple)
+            if output_pdc_tuple in self.composite_rhos.keys():
+                # do not redo unnecesary calculations
+                # print("Don't redo calculations",output_pdc_tuple)
+                return None
+            if not np.all(self.pdc - output_pdc >= 0):
+                # too many interactions with one of the pulses
+                return None
+            if np.any(new_manifold < self.minimum_manifold):
+                return None
+            elif np.any(new_manifold > self.maximum_manifold):
+                return None
+
+            remaining_pdc = self.pdc - output_pdc
+            remaining_pulse_interactions = np.sum(remaining_pdc,axis=1)
+            remaining_pulses = np.zeros(remaining_pulse_interactions.shape,dtype='bool')
+            remaining_pulses[:] = remaining_pulse_interactions
+
+            output_t0 = t[0]
+            for i in range(remaining_pulses.size):
+                if remaining_pulses[i]:
+                    test_t = self.efield_times[i] + self.pulse_times[i]
+                    if test_t[-1] < output_t0:
+                        # print('Excluded due to pulse non-overlap',output_pdc)
+                        return None
+        
         new_manifold_key = self.manifold_array_to_key(new_manifold)
         mu_key = old_manifold_key + '_to_' + new_manifold_key
-        
-        if ket_flag == up_flag:
-            # Rotating term excites the ket and de-excites the bra
-            conjugate_flag = False
-        else:
-            # Counter-rotating term
-            conjugate_flag = True
 
         if conjugate_flag:
             center = -self.centers[pulse_number]
@@ -1046,7 +1204,8 @@ alias transitions onto nonzero electric field amplitudes.
                     H_mu_key = new_bra_key + '_to_' + old_bra_key
                 rotating_flag = not up_flag
 
-            overlap_matrix = self.get_H_mu(pulse_number,H_mu_key,rotating_flag=rotating_flag)
+            overlap_matrix = self.get_H_mu(pulse_number,H_mu_key,
+                                           rotating_flag=rotating_flag)
             
             t0 = time.time()
             if ket_flag:
@@ -1112,8 +1271,11 @@ alias transitions onto nonzero electric field amplitudes.
         else:
             rho = rho * -1j
 
-        rho_out = rho_container(t,rho,n_nonzero,pulse_number,new_manifold_key)
-    
+        rho_out = rho_container(t,rho,n_nonzero,pulse_number,
+                                new_manifold_key,output_pdc)
+
+        self.next_order_counter += 1
+
         return rho_out
             
     def ket_up(self,rho_in,*,new_manifold_mask = None,pulse_number = 0):
@@ -1584,12 +1746,15 @@ alias transitions onto nonzero electric field amplitudes.
         sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
         self.signal = sig_tau_w
 
-    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True):
+    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True,makedir=True):
         if use_base_path:
             file_name = os.path.join(self.base_path,file_name)
-        save_dict = {}
+        if makedir:
+            folder = os.path.split(file_name)[0]
+            os.makedirs(folder,exist_ok=True)
         if len(pulse_delay_names) == 0:
             pulse_delay_names = ['t' + str(i) for i in range(len(self.all_pulse_delays))]
+        save_dict = {}
         for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
             save_dict[name] = delays
         if self.detection_type == 'polarization':
@@ -1598,11 +1763,16 @@ alias transitions onto nonzero electric field amplitudes.
         save_dict['signal_calculation_time'] = self.calculation_time
         np.savez(file_name,**save_dict)
 
-    def load(self,file_name,pulse_delay_names,*,use_base_path=True):
+    def load(self,file_name,pulse_delay_names=[],*,use_base_path=True):
         if use_base_path:
             file_name = os.path.join(self.base_path,file_name)
         arch = np.load(file_name)
         self.all_pulse_delays = []
+        if len(pulse_delay_names) == 0:
+            for key in arch.keys():
+                if key[0] == 't':
+                    pulse_delay_names.append(key)
+        print(pulse_delay_names)
         for name in pulse_delay_names:
             self.all_pulse_delays.append(arch[name])
         if self.detection_type == 'polarization':
