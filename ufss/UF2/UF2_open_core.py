@@ -163,6 +163,8 @@ class DensityMatrices(DiagramGenerator):
 
         self.check_for_zero_calculation = False
 
+        self.efield_mask_flag = True
+
         self.sparsity_threshold = .1
 
         self.conserve_memory = conserve_memory
@@ -219,6 +221,11 @@ class DensityMatrices(DiagramGenerator):
         self.efield_wavevectors = []
         self.rhos = dict()
         self.composite_rhos = dict()
+
+    def set_efield_mask_flag(self,efield_mask_flag):
+        if efield_mask_flag == False:
+            warnings.warn('Warning, turning off efield masking can speed up calculations, but may cause aliasing artifacts. Proceed with caution')
+        self.efield_mask_flag = efield_mask_flag
 
     def set_pulse_delays(self,all_delays):
         """Must be a list of numpy arrays, where each array is a
@@ -319,6 +326,7 @@ class DensityMatrices(DiagramGenerator):
             arrival_times = [0]
             for delay in delays:
                 arrival_times.append(arrival_times[-1]+delay)
+            
 
             if self.detection_type == 'polarization':
                 signal[counter,:] = calculate_signal(arrival_times)
@@ -375,8 +383,6 @@ be calculated on
         dt = min(ra.t[1]-ra.t[0],rb.t[1]-rb.t[0])
         t = np.arange(tmin,tmax+dt*0.9,dt)
         rho = np.zeros((ra.bool_mask.size,t.size),dtype='complex')
-        print(ra.bool_mask)
-        print(rb.bool_mask)
         rho[ra.bool_mask,:] = ra(t)
         rho[rb.bool_mask,:] += rb(t)
 
@@ -1228,9 +1234,12 @@ alias transitions onto nonzero electric field amplitudes.
         else:
             boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=ket_flag,up_flag=up_flag)
 
-            # e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
-            # boolean_matrix = boolean_matrix * e_mask
-            # overlap_matrix = overlap_matrix * e_mask
+            if self.efield_mask_flag:
+                e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
+                boolean_matrix = boolean_matrix * e_mask
+                overlap_matrix = overlap_matrix * e_mask
+            else:
+                pass
 
             overlap_matrix, n_nonzero = self.mask_dipole_matrix(boolean_matrix,overlap_matrix,m_nonzero,
                                                                 next_manifold_mask = new_manifold_mask)
@@ -1487,9 +1496,12 @@ alias transitions onto nonzero electric field amplitudes.
         
         boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=True,up_flag=False)
 
-        e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
-        boolean_matrix = boolean_matrix * e_mask
-        overlap_matrix = overlap_matrix * e_mask
+        if self.efield_mask_flag:
+                e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
+                boolean_matrix = boolean_matrix * e_mask
+                overlap_matrix = overlap_matrix * e_mask
+            else:
+                pass
 
         overlap_matrix, n_nonzero = self.mask_dipole_matrix(boolean_matrix,overlap_matrix,m_nonzero,
                                                                 next_manifold_mask = new_manifold_mask)
