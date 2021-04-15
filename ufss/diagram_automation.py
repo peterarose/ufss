@@ -288,20 +288,20 @@ class DiagramGenerator(DiagramDrawer):
     def check_new_diagram_conditions(self,arrival_times):
         new = np.array(arrival_times)
         new_pulse_sequence = np.argsort(new)
-        new_pulse_overlap_array = np.zeros((len(arrival_times),
+        new_pulse_overlap_array = np.ones((len(arrival_times),
                                             len(arrival_times)),
                                            dtype='bool')
 
         intervals = self.arrival_times_to_pulse_intervals(arrival_times)
         
-        for i in range(len(arrival_times)):
+        for i in range(len(intervals)):
             ti = intervals[i]
-            for j in range(i+1,len(arrival_times)):
+            for j in range(i+1,len(intervals)):
                 tj = intervals[j]
-                if ti[0] >= tj[0] and ti[0] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
-                elif ti[-1] >= tj[0] and ti[-1] <= tj[-1]:
-                    new_pulse_overlap_array[i,j] = True
+                if ti[0] > tj[-1]:
+                    new_pulse_overlap_array[i,j] = False
+                elif ti[-1] < tj[0]:
+                    new_pulse_overlap_array[i,j] = False
         try:
             logic_statement = (np.allclose(new_pulse_overlap_array,self.pulse_overlap_array)
                 and np.allclose(new_pulse_sequence,self.pulse_sequence))
