@@ -1497,11 +1497,11 @@ alias transitions onto nonzero electric field amplitudes.
         boolean_matrix, overlap_matrix = self.dipole_matrix(pulse_number,mu_key,ket_flag=True,up_flag=False)
 
         if self.efield_mask_flag:
-                e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
-                boolean_matrix = boolean_matrix * e_mask
-                overlap_matrix = overlap_matrix * e_mask
-            else:
-                pass
+            e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
+            boolean_matrix = boolean_matrix * e_mask
+            overlap_matrix = overlap_matrix * e_mask
+        else:
+            pass
 
         overlap_matrix, n_nonzero = self.mask_dipole_matrix(boolean_matrix,overlap_matrix,m_nonzero,
                                                                 next_manifold_mask = new_manifold_mask)
