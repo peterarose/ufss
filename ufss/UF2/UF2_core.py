@@ -213,10 +213,14 @@ class Wavepackets(DiagramGenerator):
         signal_shape = [delays.size for delays in self.all_pulse_delays]
         if self.detection_type == 'polarization':
             signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
-            if len(signal_shape) == 1:
-                pass
-            else:
+            if len(signal_shape) == self.pdc.shape[0]:
+                # get rid of the "delay" between the last pulse and the local oscillator
                 signal_shape[-1] = self.w.size
+            elif len(signal_shape) == self.pdc.shape[0] - 1:
+                # append the shape of the polariation-detection axis
+                signal_shape.append(self.w.size)
+            else:
+                raise Exception('Cannot automatically determine final signal shape')
         else:
             signal = np.zeros((len(all_delay_combinations)),dtype='complex')
 
@@ -247,10 +251,12 @@ class Wavepackets(DiagramGenerator):
         signal_shape = [delays.size for delays in self.all_pulse_delays]
         if self.detection_type == 'polarization':
             signal = np.zeros((len(all_delay_combinations),self.w.size),dtype='complex')
-            if len(signal_shape) == 1:
-                pass
-            else:
+            if len(signal_shape) == self.pdc.shape[0]:
+                # get rid of the "delay" between the last pulse and the local oscillator
                 signal_shape[-1] = self.w.size
+            elif len(signal_shape) == self.pdc.shape[0] - 1:
+                # append the shape of the polariation-detection axis
+                signal_shape.append(self.w.size)
         else:
             signal = np.zeros((len(all_delay_combinations)),dtype='complex')
 
