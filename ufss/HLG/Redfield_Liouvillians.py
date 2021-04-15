@@ -1056,7 +1056,11 @@ class DiagonalizeLiouvillian:
             else:
                 old_L_key,new_L_key = key.split('_to_')
             vl = self.L_left_eigenvectors[new_L_key]
+            if sp.issparse(vl):
+                vl = vl.toarray()
             vr = self.L_right_eigenvectors[old_L_key]
+            if sp.issparse(vr):
+                vr = vr.toarray()
             new_mu = np.zeros(mu.shape,dtype='complex')
             for i in range(3):
                 new_mu[:,:,i] = vl.dot(mu[:,:,i]).dot(vr)
