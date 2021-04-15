@@ -21,7 +21,10 @@ class run:
             self.open = True
             if 'site_bath' in pv.params['bath'].keys():
                 self.Redfield = True
-                self.secular = pv.params['bath']['secular']
+                try:
+                    self.secular = pv.params['bath']['secular']
+                except KeyError:
+                    self.secular = False
             else:
                 self.Redfield = False
                 try:
