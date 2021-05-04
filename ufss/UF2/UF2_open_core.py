@@ -13,7 +13,7 @@ import pyfftw
 from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.interpolate import interp1d as sinterp1d
 import scipy
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, issparse
 
 from ufss import DiagramGenerator
 from ufss.UF2.heaviside_convolve import HeavisideConvolve
@@ -871,11 +871,10 @@ energy singly-excited state should be set to 0
         file_name_pruned = os.path.join(self.base_path,'mu_pruned.npz')
         file_name_bool = os.path.join(self.base_path,'mu_boolean.npz')
         try:
-            file_name = file_name_pruned
-            mu_boolean_archive = np.load(file_name_bool)
             with np.load(file_name_bool) as mu_boolean_archive:
                 self.mu_boolean = {key:mu_boolean_archive[key] for key in mu_boolean_archive.keys()}
             pruned = True
+            file_name = file_name_pruned
         except FileNotFoundError:
             pruned = False
         with np.load(file_name) as mu_archive:
@@ -1236,8 +1235,14 @@ alias transitions onto nonzero electric field amplitudes.
 
             if self.efield_mask_flag:
                 e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
-                boolean_matrix = boolean_matrix * e_mask
-                overlap_matrix = overlap_matrix * e_mask
+                if np.allclose(e_mask,True):
+                    pass
+                else:
+                    boolean_matrix = boolean_matrix * e_mask
+                    if issparse(overlap_matrix):
+                        overlap_matrix = overlap_matrix.toarray()
+
+                    overlap_matrix = csr_matrix(overlap_matrix * e_mask)
             else:
                 pass
 
@@ -1456,6 +1461,10 @@ alias transitions onto nonzero electric field amplitudes.
         #                                                         next_manifold_mask = new_manifold_mask)
             
         t0 = time.time()
+
+        if issparse(overlap_matrix):
+            overlap_matrix = overlap_matrix.toarray()
+        
         polarization_field = np.einsum('ij,jik',overlap_matrix,rho)
                 
         t1 = time.time()
