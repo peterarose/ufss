@@ -7,3 +7,4 @@ from ufss.dipole_pruning import DipolePruning
 import ufss.signals as signals
 import ufss.HLG as HLG
 from ufss.efield_shapes import *
+from ufss.convergence_tester import Convergence, efieldConvergence
