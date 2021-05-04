@@ -641,6 +641,12 @@ class SecularRedfieldConstructor:
             self.set_L()
             self.save_L()
 
+            if not conserve_memory:
+                self.load_mu()
+
+                self.set_mu_Liouville_space()
+                self.save_mu()
+
     def set_spectral_densities(self):
         self.SD = {}
         self.SD['site_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
@@ -912,6 +918,157 @@ class SecularRedfieldConstructor:
         U_vec = -1j * (np.kron(e_ket,np.ones(e_bra.size)) - np.kron(np.ones(e_ket.size),e_bra))
         U = sp.diags(U_vec,format='csr')
         return U
+
+    def mu_key_to_manifold_keys(self,key):
+        if self.manifolds[0] == 'all_manifolds':
+            starting_key = 'all_manifolds'
+            ending_key = 'all_manifolds'
+        else:
+            starting_key, ending_key = key.split('_to_')
+        return starting_key, ending_key
+
+
+    def make_mu_by_manifold_ket(self,old_manifold,change):
+        i,j = old_manifold
+        i2 = i + change
+        j2 = j
+        
+        if i2 >= 0 and i2 <= self.PolyVib.maximum_manifold:
+            pass
+        else:
+            return None, None
+
+        if i2 > i:
+            mu_key = str(i) + '_to_' + str(i2)
+            mu = self.mu[mu_key]
+        else:
+            mu_key = str(i2) + '_to_' + str(i)
+            mu = self.mu[mu_key].transpose(1,0,2)
+
+        j_size = self.eigenvalues[str(j)].size
+        i_size = self.eigenvalues[str(i)].size
+        i2_size = self.eigenvalues[str(i2)].size
+        
+        bra_eye = np.eye(j_size)
+        old_key = str(i) + str(j)
+        new_key = str(i2) + str(j2)
+        
+        mu_shape = (i2_size*j_size,i_size*j_size,3)
+        new_mu = np.zeros(mu_shape,dtype='complex')
+        for i in range(3):
+            mu_i = np.kron(mu[:,:,i],bra_eye)
+            new_mu[:,:,i] = mu_i
+
+        if np.allclose(np.imag(new_mu),0):
+            new_mu = np.real(new_mu)
+        mu_key = old_key + '_to_' + new_key
+        return mu_key, new_mu
+
+    def make_mu_by_manifold_bra(self,old_manifold,change):
+        i,j = old_manifold
+        i2 = i
+        j2 = j + change
+        
+        if j2 >= 0 and j2 <= self.PolyVib.maximum_manifold:
+            pass
+        else:
+            return None, None
+
+        if j2 > j:
+            mu_key = str(j) + '_to_' + str(j2)
+            mu = self.mu[mu_key].transpose(1,0,2)
+        else:
+            mu_key = str(j2) + '_to_' + str(j)
+            mu = self.mu[mu_key]
+
+        i_size = self.eigenvalues[str(i)].size
+        j_size = self.eigenvalues[str(j)].size
+        j2_size = self.eigenvalues[str(j2)].size
+        
+        ket_eye = np.eye(i_size)
+        old_key = str(i) + str(j)
+        new_key = str(i2) + str(j2)
+        
+        mu_shape = (i_size*j2_size,i_size*j_size,3)
+        new_mu = np.zeros(mu_shape,dtype='complex')
+        for i in range(3):
+            mu_i = np.kron(ket_eye,mu[:,:,i].T)
+            new_mu[:,:,i] = mu_i
+
+        if np.allclose(np.imag(new_mu),0):
+            new_mu = np.real(new_mu)
+        mu_key = old_key + '_to_' + new_key
+        return mu_key, new_mu
+
+    def make_mu_unseparable_manifolds(self,change,ket_flag):
+        mu = self.mu['up']
+        if ket_flag:
+            mu_key = 'ket'
+        else:
+            mu = mu.transpose(1,0,2)
+            mu_key = 'bra'
+        if change == 1:
+            mu_key += '_up'
+        elif change == -1:
+            mu = mu.transpose(1,0,2)
+            mu_key += '_down'
+        else:
+            raise Exception('change must be either +1 or -1')
+        H_size = self.eigenvalues['all_manifolds'].size
+        
+        H_eye = np.eye(H_size)
+        
+        mu_shape = (H_size**2,H_size**2,3)
+        new_mu = np.zeros(mu_shape,dtype='complex')
+        for i in range(3):
+            if ket_flag:
+                mu_i = np.kron(mu[:,:,i],H_eye.T)
+            else:
+                mu_i = np.kron(H_eye,mu[:,:,i].T)
+                
+            new_mu[:,:,i] = mu_i
+
+        if np.allclose(np.imag(new_mu),0):
+            new_mu = np.real(new_mu)
+            
+        return mu_key, new_mu
+
+    def append_mu_by_manifold(self,old_manifold,change,ket_flag):
+        if ket_flag:
+            f = self.make_mu_by_manifold_ket
+        else:
+            f = self.make_mu_by_manifold_bra
+        key, mu = f(old_manifold,change)
+        if key == None:
+            pass
+        else:
+            self.mu_L_basis[key] = mu
+
+    def set_mu_Liouville_space_unseparable_manifolds(self):
+        self.mu_L_basis = dict()
+        changes = [-1,1]
+        for change,ket_flag in itertools.product(changes,[True,False]):
+            mu_key, mu = self.make_mu_unseparable_manifolds(change,ket_flag)
+            self.mu_L_basis[mu_key] = mu
+
+    def set_mu_Liouville_space_separable_manifolds(self):
+        self.mu_L_basis = dict()
+        for i_key in self.manifolds:
+            for j_key in self.manifolds:
+                manifold = (int(i_key),int(j_key))
+                self.append_mu_by_manifold(manifold,1,True)
+                self.append_mu_by_manifold(manifold,-1,True)
+                self.append_mu_by_manifold(manifold,1,False)
+                self.append_mu_by_manifold(manifold,-1,False)
+
+    def set_mu_Liouville_space(self):
+        if self.manifolds[0] == 'all_manifolds':
+            self.set_mu_Liouville_space_unseparable_manifolds()
+        else:
+            self.set_mu_Liouville_space_separable_manifolds()
+                
+    def save_mu(self):
+        np.savez(os.path.join(self.save_path,'mu_original_L_basis.npz'),**self.mu_L_basis)
 
         
 
