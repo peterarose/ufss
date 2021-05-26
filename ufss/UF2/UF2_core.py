@@ -257,6 +257,8 @@ class Wavepackets(DiagramGenerator):
             elif len(signal_shape) == self.pdc.shape[0] - 1:
                 # append the shape of the polariation-detection axis
                 signal_shape.append(self.w.size)
+            else:
+                raise Exception('Cannot automatically determine final signal shape')
         else:
             signal = np.zeros((len(all_delay_combinations)),dtype='complex')
 
@@ -352,6 +354,9 @@ be calculated on
         self.set_efields(times,efields,centers,phase_discrimination,
                          reset_psis = True,plot_fields = False)
 
+    def set_current_diagram_instructions(self,arrival_times):
+        self.current_instructions = self.get_wavefunction_diagrams(arrival_times)
+
     def calculate_signal(self,arrival_times):
         t0 = time.time()
         try:
@@ -363,10 +368,10 @@ be calculated on
             pass
         
         self.pulse_times = arrival_times
-        diagram_instructions = self.get_wavefunction_diagrams(arrival_times)
-        self.current_instructions = diagram_instructions
-        # if len(diagram_instructions) == 0:
-        #     print(arrival_times)
+        self.set_current_diagram_instructions(arrival_times)
+        diagram_instructions = self.current_instructions
+        if len(diagram_instructions) == 0:
+            print(arrival_times)
 
         t1 = time.time()
         try:
@@ -392,10 +397,6 @@ be calculated on
             pass
         
         self.pulse_times = arrival_times
-        if self.detection_type == 'integrated_polarization':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times)-1)]
-        elif self.detection_type == 'fluorescence':
-            times = [self.efield_times[i] + arrival_times[i] for i in range(len(arrival_times))]
             
         self.current_instructions = diagram_instructions
         instructions = diagram_instructions[0]
@@ -421,8 +422,10 @@ be calculated on
         ket = ket_dict['psi'][:,-1]
         return np.dot(bra,ket)
 
-
-    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset_psis = True,
+    def reset(self):
+        self.psis = dict()
+        
+    def set_efields(self,times_list,efields_list,centers_list,phase_discrimination,*,reset = True,
                     plot_fields = False):
         self.efield_times = times_list
         self.efields = efields_list
@@ -430,8 +433,8 @@ be calculated on
         self.set_phase_discrimination(phase_discrimination)
         self.dts = []
         self.efield_frequencies = []
-        if reset_psis:
-            self.psis = dict()
+        if reset:
+            self.reset()
         for t in times_list:
             if t.size == 1:
                 dt = 1
@@ -497,7 +500,7 @@ be calculated on
         e = all_e[mask]
         psi = psi_obj(t)*np.exp(-1j*e[:,np.newaxis]*t[np.newaxis,:])
         full_size = all_e.size
-        total_psi = np.zeros((full_size,t.size),dtype='complex')
+        total_psi = np.zeros(full_size,t.size)
         total_psi[mask,:] = psi
         return total_psi
 
@@ -554,7 +557,7 @@ be calculated on
         t = self.efield_times[0] # can be anything of the correct length
 
         key = self.ordered_manifolds[0]
-        psi0 = np.ones((1,t.size),dtype=complex)*np.exp(-1j*self.eigenvalues[key][initial_state]*t)[np.newaxis,:]
+        psi0 = np.ones((1,t.size),dtype=complex)
         bool_mask = np.zeros(self.eigenvalues[key].size,dtype='bool')
         bool_mask[initial_state] = True
  
@@ -626,7 +629,7 @@ energy singly-excited state should be set to 0
         """Sets the sequences used for either parallel or crossed pump and probe
         
         Args:
-            polarization_list (list): list of strings, can be 'x','y', or 'z' for linear polarizations or 'r' and 'l' for right and left circularly polarized light, respectively
+            polarization_list (list): list of four strings, can be 'x','y' or 'z'
         Returns:
             None: sets the attribute polarization sequence
 """
@@ -634,9 +637,7 @@ energy singly-excited state should be set to 0
         x = np.array([1,0,0])
         y = np.array([0,1,0])
         z = np.array([0,0,1])
-        r = np.array([1,-1j,0])/np.sqrt(2)
-        l = np.conjugate(r)
-        pol_options = {'x':x,'y':y,'z':z,'r':r,'l':l}
+        pol_options = {'x':x,'y':y,'z':z}
 
         self.polarization_sequence = [pol_options[pol] for pol in polarization_list]
         if reset_psis:
@@ -658,13 +659,14 @@ energy singly-excited state should be set to 0
             mu = self.mu[key]
             boolean_matrix = self.mu_boolean[key]
         except KeyError:
-            key = 'ket'
-            if up_flag:
-                key += '_up'
-            else:
-                key += '_down'
-            mu = self.mu[key]
-            boolean_matrix = self.mu_boolean[key]
+            try:
+                key = 'up'
+                mu = self.mu[key]
+                boolean_matrix = self.mu_boolean[key]
+            except KeyError:
+                key = 'ket_up'
+                mu = self.mu[key]
+                boolean_matrix = self.mu_boolean[key]
             
         if np.all(pol == x):
             overlap_matrix = mu[:,:,0].copy()
@@ -676,7 +678,7 @@ energy singly-excited state should be set to 0
             overlap_matrix = np.tensordot(mu,pol,axes=(-1,0))
 
         if not up_flag:
-            overlap_matrix = np.conjugate(overlap_matrix.T)
+            overlap_matrix = overlap_matrix.T
             boolean_matrix = boolean_matrix.T
 
         t1 = time.time()
@@ -1091,6 +1093,42 @@ alias transitions onto nonzero electric field amplitudes.
         self.expectation_time += t1-t0
         
         return exp_val
+
+    def get_local_oscillator(self):
+        local_oscillator_number = -1
+        efield_t = self.efield_times[local_oscillator_number]
+        efield = self.efields[local_oscillator_number]
+
+        if efield_t.size == 1:
+            # Impulsive limit: delta in time is flat in frequency
+            efield_ft = np.ones(self.w.size)*efield
+            return efield_ft
+        
+        e_dt = efield_t[1] - efield_t[0]
+        dt = self.t[1] - self.t[0]
+            
+        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
+            full_efield = np.zeros(self.t.size,dtype='complex')
+
+            # the local oscillator sets the "zero" on the clock
+            pulse_time_ind = np.argmin(np.abs(self.t))
+
+            pulse_start_ind = pulse_time_ind - efield_t.size//2
+            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
+
+            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
+            
+            full_efield[t_slice] = efield
+            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+        else:
+            efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
+            efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
+            fill_value = (efield_ft[0],efield_ft[-1])
+            f = sinterp1d(efield_w,efield_ft,fill_value = fill_value,
+                          bounds_error=False,kind='quadratic')
+            efield_ft = f(self.w)
+
+        return efield_ft
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
@@ -1108,19 +1146,8 @@ alias transitions onto nonzero electric field amplitudes.
         P_of_t = P_of_t# * np.exp(-1j*center*t)
         
         pulse_time_ind = np.argmin(np.abs(self.t))
-        efield = np.zeros(self.t.size,dtype='complex')
 
-        if efield_t.size == 1:
-            # Impulsive limit: delta in time is flat in frequency
-            efield = np.ones(self.w.size)*self.efields[local_oscillator_number]
-        else:
-            pulse_start_ind = pulse_time_ind - efield_t.size//2
-            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
-
-            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-            
-            efield[t_slice] = self.efields[local_oscillator_number]
-            efield = fftshift(ifft(ifftshift(efield)))*efield.size*dt
+        efield = self.get_local_oscillator()
 
         halfway = self.w.size//2
         pm = self.w.size//(2*undersample_factor)
@@ -1141,39 +1168,35 @@ alias transitions onto nonzero electric field amplitudes.
         """This function generates a frequency-resolved signal from a polarization field
            local_oscillator_number - usually the local oscillator will be the last pulse 
                                      in the list self.efields"""
-        pulse_time = self.pulse_times[local_oscillator_number]
-        
         efield_t = self.efield_times[local_oscillator_number]
-
-        t = efield_t + pulse_time
 
         efield = self.efields[local_oscillator_number]
 
-        signal = np.trapz(P * np.conjugate(efield),x=t)
-        if not self.return_complex_signal:
-            return np.imag(signal)
-        else:
-            return 1j*signal
+        # signal = np.trapz(P * np.conjugate(efield),x=efield_t)
+        signal = np.sum(P * np.conjugate(efield))*(efield_t[1] - efield_t[0])
+        return np.imag(signal)
 
     def add_gaussian_linewidth(self,sigma):
-        self.old_signal = self.signal.copy()
+        try:
+            old_signal = self.old_signal
+        except AttributeError:
+            self.old_signal = self.signal.copy()
+            old_signal = self.old_signal
 
-        sig_tau_t = fftshift(fft(ifftshift(self.old_signal,axes=(-1)),axis=-1),axes=(-1))
-        sig_tau_t = sig_tau_t * (np.exp(-self.t**2/(2*sigma**2))[np.newaxis,np.newaxis,:]
-                                 *np.exp(-self.t21_array**2/(2*sigma**2))[:,np.newaxis,np.newaxis])
-        sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
-        self.signal = sig_tau_w
+        if len(self.signal.shape) == 3:
 
-    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True):
-        if use_base_path:
-            file_name = os.path.join(self.base_path,file_name)
-        save_dict = {}
-        if len(pulse_delay_names) == 0:
-            pulse_delay_names = ['t' + str(i) for i in range(len(self.all_pulse_delays))]
-        for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
-            save_dict[name] = delays
-        if self.detection_type == 'polarization':
-            save_dict['wt'] = self.w
-        save_dict['signal'] = self.signal
-        save_dict['signal_calculation_time'] = self.calculation_time
-        np.savez(file_name,**save_dict)
+            sig_tau_t = fftshift(fft(ifftshift(old_signal,axes=(-1)),axis=-1),axes=(-1))
+            sig_tau_t = sig_tau_t * (np.exp(-self.t**2/(2*sigma**2))[np.newaxis,np.newaxis,:]
+                                     *np.exp(-self.t21_array**2/(2*sigma**2))[:,np.newaxis,np.newaxis])
+            sig_tau_w = fftshift(ifft(ifftshift(sig_tau_t,axes=(-1)),axis=-1),axes=(-1))
+            
+            self.signal = sig_tau_w
+
+        elif len(self.signal.shape) == 2:
+            sig_t = fftshift(fft(ifftshift(old_signal,axes=(-1)),axis=-1),axes=(-1))
+            sig_t = sig_t * (np.exp(-self.t**2/(2*sigma**2))[np.newaxis,:])
+            sig_w = fftshift(ifft(ifftshift(sig_t,axes=(-1)),axis=-1),axes=(-1))
+
+            self.signal = sig_w
+            
+        
