@@ -688,7 +688,7 @@ be calculated on
             ev = self.eigenvectors[manifold_key][:,mask]
         
         size_H = int(np.sqrt(size_L))
-        rho = rho_obj(t)#*np.exp(e[:,np.newaxis]*t[np.newaxis,:])
+        rho = rho_obj(t)*np.exp(e[:,np.newaxis]*t[np.newaxis,:])
         if original_L_basis:
             new_rho = ev.dot(rho)
         else:
@@ -1062,7 +1062,7 @@ alias transitions onto nonzero electric field amplitudes.
 
     def manifold_key_to_array(self,key):
         """Key must be a string of exactly 2 integers, the first describing
-            the ket manifold, the second the bra manifold.  If the density 
+            the ket manifold, the second, the bra manifold.  If the density 
             matrix is represented in the full space, rather than being divided
             into manifolds, the first integer reperesents the total number of
             excitations to the ket side, and the second integers represents 
@@ -1122,6 +1122,14 @@ alias transitions onto nonzero electric field amplitudes.
             manifold_change = np.array([0,change],dtype=int)
         old_manifold = self.manifold_key_to_array(old_manifold_key)
         new_manifold = old_manifold + manifold_change
+
+        # my system breaks above 9. Need to fix this...
+        if new_manifold[0] > 9:
+            new_manifold[0] = 9
+            warnings.warn('manifold_key tracking system breaks down after 9 excitations')
+        if new_manifold[1] > 9:
+            new_manifold[1] = 9
+            warnings.warn('manifold_key tracking system breaks down after 9 excitations')
 
         input_pdc = rho_in.pdc
         output_pdc = input_pdc.copy()
@@ -1507,8 +1515,14 @@ alias transitions onto nonzero electric field amplitudes.
 
         if self.efield_mask_flag:
             e_mask = self.electric_field_mask(pulse_number,mu_key,conjugate_flag=conjugate_flag)
-            boolean_matrix = boolean_matrix * e_mask
-            overlap_matrix = overlap_matrix * e_mask
+            if np.allclose(e_mask,True):
+                pass
+            else:
+                boolean_matrix = boolean_matrix * e_mask
+                if issparse(overlap_matrix):
+                    overlap_matrix = overlap_matrix.toarray()
+
+                overlap_matrix = csr_matrix(overlap_matrix * e_mask)
         else:
             pass
 
@@ -1682,13 +1696,8 @@ alias transitions onto nonzero electric field amplitudes.
         
         e_dt = efield_t[1] - efield_t[0]
         dt = self.t[1] - self.t[0]
-
-        if e_dt > dt:
-            raise Exception("""Local oscillator dt is too large for desired 
-                signal detection bandwidth.  You must either use method
-                set_t with a larger dt, or supply local oscillator with 
-                smaller value of dt""")
-        elif (np.isclose(e_dt,dt) and efield_t[-1] >= self.t[-1]):
+        
+        if (np.isclose(e_dt,dt) and efield_t[-1] <= self.t[-1]):
             full_efield = np.zeros(self.t.size,dtype='complex')
 
             # the local oscillator sets the "zero" on the clock
@@ -1701,11 +1710,18 @@ alias transitions onto nonzero electric field amplitudes.
             
             full_efield[t_slice] = efield
             efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
-        elif efield_t[-1] > self.t[-1]:
-            f = sinterp1d(efield_t,efield,fill_value = (0,0),bounds_error=False,
-                          kind='linear')
-            full_efield = f(self.t)
-            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
+
+        elif e_dt > dt*1.00001:
+            raise Exception("""Local oscillator dt is too large for desired 
+                signal detection bandwidth.  You must either use method
+                set_t with a larger dt, or supply local oscillator with 
+                smaller value of dt""")
+        
+        # elif efield_t[-1] < self.t[-1]:
+        #     f = sinterp1d(efield_t,efield,fill_value = (0,0),bounds_error=False,
+        #                   kind='linear')
+        #     full_efield = f(self.t)
+        #     efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
         else:
             efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
             efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
