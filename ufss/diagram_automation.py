@@ -185,6 +185,19 @@ class DiagramGenerator(DiagramDrawer):
         self.pdc = pdc
         self.pdc_tuple = tuple(tuple(pdc[i,:]) for i in range(pdc.shape[0]))
 
+    def save_diagrams_as_text(self,diagrams,*,file_name = 'auto'):
+        if file_name == 'auto':
+            file_name = ''
+            for nr,nc in self.pdc_tuple:
+                file_name += '{1}_{2}_'.format(nr,nc)
+            file_name = file_name[:-1]
+            file_name += '.txt'
+        with open(file_name,'w') as txtfile:
+            txtfile.writelines('['+str(diagrams[0]))
+            for diagram in diagrams[1:]:
+                txtfile.writelines(',\n '+str(diagram))
+            txtfile.writelines(']')
+
     def polarization_detection_filter_instructions(self,instructions):
         rho_manifold = np.array([0,0])
         for ins in instructions:
