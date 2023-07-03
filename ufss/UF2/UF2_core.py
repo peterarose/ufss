@@ -166,6 +166,7 @@ class Wavepackets(DiagramGenerator):
             
         elif detection_type == 'integrated_polarization':
             self.psi_to_signal = self.integrated_polarization_detection_signal
+            self.return_complex_signal = False
             
         elif detection_type == 'fluorescence':
             self.psi_to_signal = self.fluorescence_detection_signal
@@ -1161,7 +1162,7 @@ alias transitions onto nonzero electric field amplitudes.
         if not self.return_complex_signal:
             return np.imag(signal)
         else:
-            return 1j*signal
+            return -1j*signal
 
     def integrated_polarization_to_signal(self,P,*,
                                 local_oscillator_number = -1):
@@ -1174,7 +1175,10 @@ alias transitions onto nonzero electric field amplitudes.
 
         # signal = np.trapz(P * np.conjugate(efield),x=efield_t)
         signal = np.sum(P * np.conjugate(efield))*(efield_t[1] - efield_t[0])
-        return np.imag(signal)
+        if not self.return_complex_signal:
+            return np.imag(signal)
+        else:
+            return -1j*signal
 
     def add_gaussian_linewidth(self,sigma):
         try:
@@ -1198,5 +1202,39 @@ alias transitions onto nonzero electric field amplitudes.
             sig_w = fftshift(ifft(ifftshift(sig_t,axes=(-1)),axis=-1),axes=(-1))
 
             self.signal = sig_w
+
+    def save(self,file_name,pulse_delay_names = [],*,use_base_path=True,makedir=True):
+        if use_base_path:
+            file_name = os.path.join(self.base_path,file_name)
+        if makedir:
+            folder = os.path.split(file_name)[0]
+            os.makedirs(folder,exist_ok=True)
+        if len(pulse_delay_names) == 0:
+            pulse_delay_names = ['t' + str(i) for i in range(len(self.all_pulse_delays))]
+        save_dict = {}
+        for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
+            save_dict[name] = delays
+        if self.detection_type == 'polarization':
+            save_dict['wt'] = self.w
+        save_dict['signal'] = self.signal
+        save_dict['signal_calculation_time'] = self.calculation_time
+        np.savez(file_name,**save_dict)
+
+    def load(self,file_name,pulse_delay_names=[],*,use_base_path=True):
+        if use_base_path:
+            file_name = os.path.join(self.base_path,file_name)
+        arch = np.load(file_name)
+        self.all_pulse_delays = []
+        if len(pulse_delay_names) == 0:
+            for key in arch.keys():
+                if key[0] == 't':
+                    pulse_delay_names.append(key)
+        print(pulse_delay_names)
+        for name in pulse_delay_names:
+            self.all_pulse_delays.append(arch[name])
+        if self.detection_type == 'polarization':
+            self.w = arch['wt']
+        self.signal = arch['signal']
+        self.calculation_time = arch['signal_calculation_time']
             
         
