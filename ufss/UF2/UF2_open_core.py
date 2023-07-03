@@ -1123,13 +1123,13 @@ alias transitions onto nonzero electric field amplitudes.
         old_manifold = self.manifold_key_to_array(old_manifold_key)
         new_manifold = old_manifold + manifold_change
 
-        # my system breaks above 9. Need to fix this...
-        if new_manifold[0] > 9:
-            new_manifold[0] = 9
-            warnings.warn('manifold_key tracking system breaks down after 9 excitations')
-        if new_manifold[1] > 9:
-            new_manifold[1] = 9
-            warnings.warn('manifold_key tracking system breaks down after 9 excitations')
+        # # my system breaks above 9. Need to fix this...
+        # if new_manifold[0] > 9:
+        #     new_manifold[0] = 9
+        #     warnings.warn('manifold_key tracking system breaks down after 9 excitations')
+        # if new_manifold[1] > 9:
+        #     new_manifold[1] = 9
+        #     warnings.warn('manifold_key tracking system breaks down after 9 excitations')
 
         input_pdc = rho_in.pdc
         output_pdc = input_pdc.copy()
@@ -1182,6 +1182,7 @@ alias transitions onto nonzero electric field amplitudes.
             ev1 = self.eigenvalues[old_manifold_key]
             ev2 = self.eigenvalues[new_manifold_key]
 
+        print(m_nonzero)
         exp_factor1 = np.exp( (ev1[m_nonzero,np.newaxis] - 1j*center)*t[np.newaxis,:])
         
         rho = rho_in(t) * exp_factor1
@@ -1757,7 +1758,7 @@ alias transitions onto nonzero electric field amplitudes.
         if not self.return_complex_signal:
             return np.imag(signal)
         else:
-            return 1j*signal
+            return -1j*signal
 
     def integrated_polarization_to_signal(self,P,*,
                                 local_oscillator_number = -1):
@@ -1772,7 +1773,7 @@ alias transitions onto nonzero electric field amplitudes.
         if not self.return_complex_signal:
             return np.imag(signal)
         else:
-            return 1j*signal
+            return -1j*signal
 
     def add_gaussian_linewidth(self,sigma):
         self.old_signal = self.signal.copy()
