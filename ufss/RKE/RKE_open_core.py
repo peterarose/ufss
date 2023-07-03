@@ -244,6 +244,7 @@ class RKE_DensityMatrices(DiagramGenerator):
         elif detection_type == 'integrated_polarization':
             raise Exception('detection_type: Integrated polarization is not implemented for Open RKE')
             self.rho_to_signal = self.integrated_polarization_detection_rho_to_signal
+            self.return_complex_signal = False
             
         elif detection_type == 'fluorescence':
             self.rho_to_signal = self.fluorescence_detection_rho_to_signal
@@ -1300,7 +1301,7 @@ energy singly-excited state should be set to 0
         if not self.return_complex_signal:
             return np.imag(signal)
         else:
-            return 1j*signal
+            return -1j*signal
 
     def integrated_polarization_to_signal(self,P,*,
                                 local_oscillator_number = -1):
@@ -1312,7 +1313,10 @@ energy singly-excited state should be set to 0
         efield = self.efields[local_oscillator_number]
 
         signal = np.trapz(P * np.conjugate(efield),x=efield_t)
-        return np.imag(signal)
+        if not self.return_complex_signal:
+            return np.imag(signal)
+        else:
+            return -1j*signal
 
     def save(self,file_name,pulse_delay_names,*,use_base_path=True):
         if use_base_path:
