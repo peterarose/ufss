@@ -179,6 +179,8 @@ class DensityMatrices(DiagramGenerator):
 
         self.set_rho_shapes()
 
+        self.load_H_eigensystem()
+
         if not self.conserve_memory:
             self.load_mu()
 
@@ -802,6 +804,26 @@ array index
         value = array[index]
         return index, value
 
+    def load_H_eigensystem(self):
+        """Look for the eigenvalues and eigenvectors of H, and load them 
+            if available. Useful as a convenience for assigning spectral 
+            positions"""
+        parent_dir = os.path.split(self.base_path)[0]
+        H_e_name = os.path.join(parent_dir,'closed','eigenvalues.npz')
+        H_ev_name = os.path.join(parent_dir,'closed','eigenvectors.npz')
+        try:
+            with np.load(H_e_name) as eigval_archive:
+                manifolds = list(eigval_archive.keys())
+                self.H_eigenvalues = {key:eigval_archive[key] for key in manifolds}
+        except FileNotFoundError:
+            pass
+        try:
+            with np.load(H_ev_name) as eigvec_archive:
+                manifolds = list(eigvec_archive.keys())
+                self.H_eigenvectors = {key:eigvec_archive[key] for key in manifolds}
+        except FileNotFoundError:
+            pass
+
     def load_eigensystem(self):
         """Load in known eigenvalues. Must be stored as a numpy archive file,
 with keys: GSM, SEM, and optionally DEM.  The eigenvalues for each manifold
@@ -1182,7 +1204,6 @@ alias transitions onto nonzero electric field amplitudes.
             ev1 = self.eigenvalues[old_manifold_key]
             ev2 = self.eigenvalues[new_manifold_key]
 
-        print(m_nonzero)
         exp_factor1 = np.exp( (ev1[m_nonzero,np.newaxis] - 1j*center)*t[np.newaxis,:])
         
         rho = rho_in(t) * exp_factor1
