@@ -640,7 +640,7 @@ class SecularRedfieldConstructor:
             self.set_Y()
             self.set_L()
             self.save_L()
-
+ 
             if not conserve_memory:
                 self.load_mu()
 
@@ -804,9 +804,9 @@ class SecularRedfieldConstructor:
         manifold_key = 'all_manifolds'
         size = self.eigenvalues[manifold_key].size
         
-        Y2_iikk = np.zeros((size,size))
-        Y2_ijij = np.zeros((size,size))
-        Y2_ijji = np.zeros((size,size))
+        Y3_iikk = np.zeros((size,size))
+        Y3_ijij = np.zeros((size,size))
+        Y3_ijji = np.zeros((size,size))
         
         for n in range(self.PolyVib.Polymer.num_sites):
             # electronic excitation creation operator
@@ -1146,7 +1146,11 @@ class DiagonalizeLiouvillian:
         return eigvals, eigvecs, eigvecs_left
 
     def eig2(self,L_key,*,check_eigenvectors = True):
-        ket_key,bra_key = L_key
+        if L_key == 'all_manifolds':
+            ket_key = 'all_manifolds'
+            bra_key = 'all_manifolds'
+        else:
+            ket_key,bra_key = L_key
         L = self.L[L_key]
         if L.dtype == np.dtype('O'):
             L = L[()]
