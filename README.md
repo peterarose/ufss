@@ -25,6 +25,8 @@ Contains 4 separate modules:
 4. Hamiltonian/Liouvillian Generator (HLG) - tool for generating vibronic Hamiltonians and (optionally) Liouvillians from simple parameter inputs
   - contained in vibronic_eigenstates sub-directory
 
+## Les Houches Summer School Course
+Dr. James Green developed a short course about nonlinear optical spectroscopy (NLOS) that uses UFSS to simulate linear absorption, transient absorption, and 2D spectra for a vibronic system coupled to a Markovian bath. The course is a jupyter notebook called "LesHouches_Spectroscopy.ipynb" and is inlcuded in this repository. It is a great introduction to both NLOS and how to use UFSS, and we are very grateful to Dr. Green for sharing it with us. This Jupyter notebook will be published as a chapter in a book that will be released sometime in the next year, and we will provide a link to that book once it is published. 
 
 ## Taking a test drive in Google's Colaboratory
 To try ufss without installing or downloading the repository,
@@ -39,7 +41,7 @@ notebooks not authored by Google. When prompted by the warning, select
 reset all runtimes)
 
 ## Examples
-There are four jupyter notebooks included with this repository that give examples of working with the diagram generator and generating spectroscopic signals. Some notebooks show how to generate figures in the manuscripts describing UFSS.
+In addition to LesHouches_Spectroscopy.ipynb, there are several jupyter notebooks included with this repository that give examples of working with the diagram generator and generating spectroscopic signals. Some notebooks show how to generate figures in the manuscripts describing UFSS.
 
 ## Dependencies  
 This code depends upon the following packages:  
