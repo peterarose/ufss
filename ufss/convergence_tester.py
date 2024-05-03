@@ -85,7 +85,7 @@ class efieldConvergence(Convergence):
     def __init__(self,spec_func,dts,Deltas):
         """
         Args:
-            spec_func (function) : must take as arguments Delta and M, and
+            spec_func (function) : must take as arguments dt and Delta, and
                 return an ndarray, which should be a spectroscopic signal
 """
         max_Delta = Deltas[-1]
