@@ -71,8 +71,12 @@ class FWMIsotropicAverage(object):
             # Check to see if the dipole operator has any non-zero components along the given
             # molecular frame axis, if the dipole exists only in the x-y plane, for example,
             # then we can avoid doing quite a few unnecessary calculations!
-            random_mu_key = list(self.sc.mu.keys())[0]
-            test_mu = self.sc.mu[random_mu_key]
+            try:
+                random_mu_key = list(self.sc.mu.keys())[0]
+                test_mu = self.sc.mu[random_mu_key]
+            except AttributeError:
+                random_mu_key = list(self.sc.H_mu.keys())[0]
+                test_mu = self.sc.H_mu[random_mu_key]
             if type(test_mu) is np.ndarray:
                 if not np.allclose(test_mu[:,:,i],0):
                     pol_options.append(xyz[i])
