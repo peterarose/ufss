@@ -10,9 +10,12 @@ from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 
 def plot2D(x,y,z,contour_levels = None,part = 'complex',norm = 1,vmax='max',contours_only = False,
            contour_colormap='seismic',contour_colors=None,ax=None,fig=None,colorbar=True,colorbar_ax=None,
-           ticks = [],alpha=None,colormap='seismic'):
+           ticks = [],alpha=None,colormap='seismic',figsize='default'):
     if ax == None:
-        fig, ax = plt.subplots()
+        if figsize == 'default':
+            fig, ax = plt.subplots()
+        else:
+            fig, ax = plt.subplots(figsize=figsize)
     X,Y = np.meshgrid(x,y,indexing='ij')
     if type(contour_levels) is np.ndarray:
         num_contours = contour_levels.size
