@@ -140,7 +140,7 @@ class SignalProcessing(object):
         integrated_fft = fft(integrated)
         integrated_fft[0] = 0
         integrated_fft = fftshift(integrated_fft)
-        return w_T, integrated_ft
+        return w_T, integrated_fft
         
     def find_zero(self,x,arr):
         """Given an input 1d array, extrapolate a zero crossing
