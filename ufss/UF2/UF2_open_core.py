@@ -1182,7 +1182,6 @@ alias transitions onto nonzero electric field amplitudes.
             ev1 = self.eigenvalues[old_manifold_key]
             ev2 = self.eigenvalues[new_manifold_key]
 
-        print(m_nonzero)
         exp_factor1 = np.exp( (ev1[m_nonzero,np.newaxis] - 1j*center)*t[np.newaxis,:])
         
         rho = rho_in(t) * exp_factor1
