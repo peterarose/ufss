@@ -9,7 +9,7 @@ pip3 install ufss if pip points to python 2 on your machine)
 
 Visualizing Feynman diagrams requires a TeX distribution
 
-(If you would like to try ufss out without cloning this repository or installing, see below for links to Google Colaboratory notebooks)
+If you would like to try ufss out without cloning this repository or installing, you can open the example notebooks in google colab. The README file in the examples directory includes a link showing how to open one of examples in google colab.
 
 ## Overview
 
