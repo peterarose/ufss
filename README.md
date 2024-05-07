@@ -9,7 +9,15 @@ pip3 install ufss if pip points to python 2 on your machine)
 
 Visualizing Feynman diagrams requires a TeX distribution
 
-If you would like to try ufss out without cloning this repository or installing, you can open the example notebooks in google colab. The README file in the examples directory includes a link showing how to open one of examples in google colab.
+## Taking a test drive in Google's Colaboratory
+To try ufss without installing or downloading the repository,
+follow this link to see examples using the Diagram Generator:  
+https://colab.research.google.com/github/peterarose/ufss/blob/master/examples/DiagramGeneratorExample_Colab.ipynb
+
+(Note: Google's Coloaboratory gives a warning message about running Jupyter
+notebooks not authored by Google. When prompted by the warning, select
+"RUN ANYWAY", and then click "YES" when it asks you if you would like to
+reset all runtimes)
 
 ## Overview
 
@@ -33,7 +41,7 @@ This code depends upon the following packages:
 numpy, matplotlib, pyfftw, scipy>=1, pyyaml, pyx
 
 ## References
-If you use UFSS, we request that you cite the following articles, which describe how its components work."
+If you use UFSS, we request that you cite the following articles, which describe how its components work.
 
 [1] Peter A. Rose and Jacob J. Krich, "Automatic Feynman diagram generation for nonlinear optical spectroscopies and application to fifth-order spectroscopy with pulse overlaps", [J. Chem. Phys. 154, 034109 (2021)](https://doi.org/10.1063/5.0024105)
 
