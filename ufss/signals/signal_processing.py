@@ -39,7 +39,11 @@ class SignalProcessing(object):
         """Redundant with subtract_DC
 """
         k,f = SignalProcessing.ft1D(x,y,axis=axis,zero_DC=True)
-        return SignalProcessing.ift1D(k,f,axis=axis,zero_DC=False)
+        x2,y2 = SignalProcessing.ift1D(k,f,axis=axis,zero_DC=False)
+        if np.isclose(x[0],0):
+            y2 = ifftshift(y2,axes=(axis))
+        return x, y2
+            
 
     def integrate_TA(self,x,signal,*,x_range = 'all'):
         if x_range == 'all':
@@ -134,20 +138,38 @@ class SignalProcessing(object):
     def integrated_ft(self,delay_time_start = 1,delay_time_stop = 300):
         delay_time_indices = np.where((self.delay_times > delay_time_start) & (self.delay_times < delay_time_stop))[0]
         delay_times = self.delay_times[delay_time_indices]
-        sig = self.signal_vs_delay_times[:,delay_time_indices]
-        integrated = np.trapz(sig,x=self.TA.w,axis=0)
+        sig = self.signal[delay_time_indices,:]
+        integrated = np.trapz(sig,x=self.TA.w,axis=-1)
         w_T = fftshift(fftfreq(delay_times.size,d=(delay_times[1] - delay_times[0])))*2*np.pi
         integrated_fft = fft(integrated)
         integrated_fft[0] = 0
         integrated_fft = fftshift(integrated_fft)
-        return w_T, integrated_fft
+        return w_T, integrated_ft
+
+    def find_all_zeros(self,x,arr):
+        inds = np.where(arr[:-1] * arr[1:] < 0)[0]
+        zeros = np.zeros(inds.size)
+        for i in range(inds.size):
+            ind = inds[i]
+            zero = (x[ind] + x[ind+1])/2
+            zeros[i] = zero
+        return zeros
+
+    def find_zero_closest_to(self,x,arr,*,ref=0):
+        zeros = self.find_all_zeros(x,arr)
+        try:
+            min_ind = np.argmin(np.abs(zeros-ref))
+            zero = zeros[min_ind]
+        except ValueError:
+            zero = np.nan
+        return zero
         
-    def find_zero(self,x,arr):
+    def find_zero_brentq(self,x,arr,domain=[-2.2,2.2]):
         """Given an input 1d array, extrapolate a zero crossing
 """
         y = sinterp1d(x,arr)
         try:
-            zero = sbrentq(y,-0.5,0.5)
+            zero = sbrentq(y,*domain)
         except:
             zero = np.nan
         return zero

@@ -8,14 +8,61 @@ import matplotlib.pyplot as plt
 import matplotlib
 from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 
-def plot2D(x,y,z,contour_levels = None,part = 'complex',norm = 1,vmax='max',contours_only = False,
-           contour_colormap='seismic',contour_colors=None,ax=None,fig=None,colorbar=True,colorbar_ax=None,
-           ticks = [],alpha=None,colormap='seismic',figsize='default'):
+def rescale_intensity(signal,factor):
+    Smax = np.max(np.abs(signal))
+    S = signal/Smax
+    argS = np.angle(signal)
+    logS = np.log10((np.abs(S)+1/factor))+np.log10(factor)
+    logS = logS * Smax / np.max(np.abs(logS))
+    return logS*np.exp(1j*argS)
+
+def custom_colorbar(scale_function,cmap,cax,*,yticks=[]):
+    n = 500
+    x = np.arange(2) #dummy variable for x-axis
+    y = np.linspace(-1,1,num=n)
+    dy = y[1] - y[0]
+    z = y
+    Z = np.ones((y.size,x.size))*z[:,np.newaxis]
+    
+    y2 = np.linspace(-1-dy,1+dy,num=n+1) #Fix pcolormesh artifact
+    
+    cax.pcolormesh(x,y2,Z,cmap=cmap)
+    cax.set_ylim([-1,1])
+    cax.set_xticks([])
+    if yticks:
+        pass
+    else:
+        yticks = cax.get_yticks()
+    cax.set_yticks(np.real(scale_function(yticks)))
+    cax.set_yticklabels([str(x) for x in yticks])
+
+def plot2D_logscaled(x,y,z,logfactor=1,part = 'real',norm = 1,vmax='max',ax=None,fig=None,
+                     colorbar_ax=None,ticks=[],colormap='seismic',figsize=(4,3)):
+    f = lambda x: rescale_intensity(x,logfactor)
+    z = f(z)
+    if fig == None and ax != None:
+        raise Exception('Must pass both figure and axis handles, or neither')
+    elif fig == None:
+        fig = plt.figure(constrained_layout=True,figsize=figsize)
+        widths = [1, 0.05]
+        heights = [1]
+        spec = fig.add_gridspec(ncols=len(widths), nrows=len(heights), width_ratios=widths,
+                                height_ratios=heights)
+        ax = fig.add_subplot(spec[0, 0])
+        colorbar_ax = fig.add_subplot(spec[0,1])
+    plot2D(x,y,z,part=part,norm=norm,fig=fig,ax=ax,colorbar=False,colormap=colormap,vmax=vmax)
+    custom_colorbar(f,colormap,colorbar_ax,yticks=ticks)
+    return fig, ax
+
+def plot2D(x,y,z,contour_levels = None,part = 'complex',norm = 1,vmax='max',
+           contours_only = False,contour_colormap='seismic',
+           contour_colors=None,ax=None,fig=None,colorbar=True,
+           colorbar_ax=None,ticks = [],alpha=None,colormap='seismic'):
     if ax == None:
-        if figsize == 'default':
-            fig, ax = plt.subplots()
-        else:
-            fig, ax = plt.subplots(figsize=figsize)
+        fig, ax = plt.subplots()
+    elif fig == None:
+        #ax was specified but not fig. Get the current figure
+        fig = plt.gcf()
     X,Y = np.meshgrid(x,y,indexing='ij')
     if type(contour_levels) is np.ndarray:
         num_contours = contour_levels.size
@@ -38,6 +85,7 @@ def plot2D(x,y,z,contour_levels = None,part = 'complex',norm = 1,vmax='max',cont
     if norm == 'self':
         norm = np.max(np.abs(Z))
     Z = Z/norm
+    # print(np.max(np.abs(Z)))
     if contour_flag:
         if part == 'complex':
             contour_Z = np.abs(Z)
@@ -132,17 +180,19 @@ class Plotter(object):
         # Cut out unwanted detection frequency points
         w_ind = np.where((self.w > frequency_range[0]) & (self.w < frequency_range[1]))[0]
         w = self.w[w_ind]
-        sig = self.signal[w_ind,:]*scale_factor
+        sig = self.signal[:,w_ind]*scale_factor
 
         if subtract_DC:
-            sig = self.subtract_DC(sig)
-        ww, tt = np.meshgrid(self.delay_times,w)
+            T, sig = self.remove_DC(self.delay_times,sig,axis=0)
+            tt, ww = np.meshgrid(T,w,indexing='ij')
+        else:
+            tt, ww = np.meshgrid(self.delay_times,w,indexing='ij')
         if create_figure:
             plt.figure()
         if color_range == 'auto':
-            plt.pcolormesh(ww,tt,sig)
+            plt.pcolormesh(tt,ww,np.real(sig))
         else:
-            plt.pcolormesh(ww,tt,sig,vmin=color_range[0],vmax=color_range[1])
+            plt.pcolormesh(tt,ww,np.real(sig),vmin=color_range[0],vmax=color_range[1])
         if draw_colorbar:
             plt.colorbar()
         plt.xlabel('Delay time ($\omega_0^{-1}$)',fontsize=16)
