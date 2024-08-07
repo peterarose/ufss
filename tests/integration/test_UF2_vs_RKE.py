@@ -57,14 +57,23 @@ def gaussian(t,sigma):
     pre = 1/(np.sqrt(2*np.pi)*sigma)
     return pre * np.exp(-t**2/(2*sigma**2))
 
-def setup(uf2_flag=True,conserve_memory=True):
+def setup(uf2_flag=True,conserve_memory=True,open=True):
     open_folder = os.path.join(folder,'open')
-    if uf2_flag:
-        obj = ufss.DensityMatrices(open_folder,detection_type='polarization',conserve_memory=conserve_memory)
-        M = 41
+    closed_folder = os.path.join(folder,'closed')
+    if open:
+        if uf2_flag:
+            obj = ufss.DensityMatrices(open_folder,detection_type='polarization',conserve_memory=conserve_memory)
+            M = 41
+        else:
+            obj = ufss.RKE_DensityMatrices(open_folder,detection_type='polarization',conserve_memory=conserve_memory)
+            M = 801
     else:
-        obj = ufss.RKE_DensityMatrices(open_folder,detection_type='polarization',conserve_memory=conserve_memory)
-        M = 801
+        if uf2_flag:
+            obj = ufss.Wavepackets(closed_folder,detection_type='polarization')
+            M = 41
+        else:
+            obj = ufss.RKWavefunctions(closed_folder,detection_type='polarization')
+            M = 801
 
 
     sigma = 1
@@ -91,29 +100,40 @@ def L2_norm(a,b):
     
 
 class test_UF2_vs_RKE(unittest.TestCase):
-    """This test verifies that UFSS produces the same frequency-integrated
-transient absorption spectrum as is generated using the code released with
-the Ultrafast Spectroscopy book 
-(https://iopscience.iop.org/book/978-0-750-31062-8, see supplementary 
-material). The spectrum contained in the file 
-fixtures/so_comparison_dimer/MATLAB_SOP_comparison.mat was obtained by 
-running the downloaded code and using the parameters contained in the file
-fixtures/so_comparison_dimer/MATLAB_SOP_comparison_params.mat.
-
-This test serves to simultaneously test the diagram generator, the 
-Hamiltonian generator, and UF2, since the comparison method uses
-a different method for representing the Hamiltonian, and a different method
-for propagating the wavefunctions and including the pulse shapes. The other
-code Feynman diagrams that are written by hand. This does NOT test the 
-Liouvillian generator or the open UF2 algorithm, since the MATLAB code only
-works for closed systems.
+    """This is to test that UF2 and RKE gives the same result, to
+        within the expected tolerance. This tests the UF2 and RKE
+        modules, both for open and closed calculations, but does
+        not test the HLG, since both UF2 and RKE are relying on it
+        for this test.
 """
-    def test(self):
+    def test_1(self):
         make_L()
         uf2 = setup(uf2_flag = True)
         uf2_sig = uf2.calculate_signal_all_delays()
 
         rke = setup(uf2_flag = False)
+        rke_sig = rke.calculate_signal_all_delays()
+
+        diff = L2_norm(uf2_sig,rke_sig)
+        self.assertTrue(diff < 0.01)
+
+    def test_2(self):
+        make_L()
+        uf2 = setup(uf2_flag = True,conserve_memory=False)
+        uf2_sig = uf2.calculate_signal_all_delays()
+
+        rke = setup(uf2_flag = False,conserve_memory=False)
+        rke_sig = rke.calculate_signal_all_delays()
+
+        diff = L2_norm(uf2_sig,rke_sig)
+        self.assertTrue(diff < 0.01)
+
+    def test_3(self):
+        make_L()
+        uf2 = setup(uf2_flag = True, open=False)
+        uf2_sig = uf2.calculate_signal_all_delays()
+
+        rke = setup(uf2_flag = False, open=False)
         rke_sig = rke.calculate_signal_all_delays()
 
         diff = L2_norm(uf2_sig,rke_sig)

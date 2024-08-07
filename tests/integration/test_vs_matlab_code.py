@@ -13,8 +13,8 @@ def calculate_spectrum_with_UF2():
                               detection_type='integrated_polarization')
 
     # defining the optical pulses in the RWA
-    M = 9 # number of points used to resolve optical pulses
-    Delta = 6 # pulse interval
+    M = 41 # number of points used to resolve optical pulses
+    Delta = 10 # pulse interval
     t = np.linspace(-Delta/2,Delta/2,num=M)
     dt = t[1] - t[0]
 

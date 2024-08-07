@@ -67,7 +67,10 @@ class test_against_smallwood(unittest.TestCase):
         analytical_sig_path = os.path.join('fixtures','v_3LS',
                                            'analytical_signal.npy')
         analytical_sig = np.load(analytical_sig_path)
-        diff = L2_norm(sig_ft[:,0,:],analytical_sig[:,0,:])
+        # signal definition has changed since this test was first made
+        # signals in UFSS are now a factor of pi smaller, and complex
+        # signals have a factor of -1 relative to the original implementation
+        diff = L2_norm(-np.pi*sig_ft[:,0,:],analytical_sig[:,0,:])
         self.assertTrue(diff < 0.007)
     
 

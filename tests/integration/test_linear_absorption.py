@@ -167,3 +167,4 @@ class test_against_squared_dipoles(unittest.TestCase):
         
 if __name__ == '__main__':
     unittest.main()
+np.load(analytical_signal.npy)
