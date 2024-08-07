@@ -2,14 +2,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import matplotlib
-from scipy.sparse import csr_matrix, identity, kron
+from scipy.sparse import csr_matrix, kron
 from scipy.sparse.linalg import eigs, eigsh
 import itertools
-from scipy.linalg import block_diag, eig, expm, eigh
+from scipy.linalg import eig, expm, eigh
 import yaml
 import os
-import copy
-from scipy.special import factorial, binom
+from scipy.special import factorial
 from numpy.polynomial.hermite import hermval
 import warnings
 import time
@@ -44,6 +43,7 @@ class LadderOperators:
         self.calculation_size = size + extra_size
         self.set_a_and_ad()
         self.set_x_and_p()
+        self.set_N()
 
     def destroy(self):
         """Constructs annihilation operator for dispalced SHO
@@ -79,6 +79,11 @@ class LadderOperators:
         self._ad = self.create()
         self.ad = self._ad[:self.size,:self.size]
 
+    def set_N(self):
+        """Constructs number operator"""
+        self._N = self._ad.dot(self._a)
+        self.N = self._N[:self.size,:self.size]
+
     def set_x_and_p(self):
         """Sets the position (x) and momentum (p) operators using the 
             creation and annihilation operator methods.
@@ -112,6 +117,50 @@ class LadderOperators:
 """
         pn = np.linalg.matrix_power(self._p,n)
         return pn[:self.size,:self.size]
+    
+    def _displacement_operator(self,alpha):
+        """Creates displacement operator of size N x N where N is the 
+            calculation size
+        
+        Args:
+            alpha (complex) : complex displacement
+        Returns:
+            np.ndarray : displacement operator
+        """
+        return expm(alpha * self._ad - np.conjugate(alpha) * self._a)
+    
+    def displacement_operator(self,alpha):
+        """Creates displacement operator of size N x N where N is the size
+        
+        Args:
+            alpha (complex) : complex displacement
+        Returns:
+            np.ndarray : displacement operator
+        """
+        return self._displacement_operator(alpha)[:self.size,:self.size]
+    
+    def _squeezing_operator(self,zeta):
+        """Creates squeezing operator of size N x N where N is the 
+            calculation size
+        
+        Args:
+            zeta (complex) : complex squeezing parameter
+        Returns:
+            np.ndarray : squeezing operator
+        """
+        a2 = np.linalg.matrix_power(self._a,2)
+        ad2 = np.linalg.matrix_power(self._ad,2)
+        return expm((np.conjugate(zeta) * a2 - zeta * ad2)/2)
+    
+    def squeezing_operator(self,zeta):
+        """Creates squeezing operator of size N x N where N is the size
+        
+        Args:
+            zeta (complex) : complex squeezing parameter
+        Returns:
+            np.ndarray : squeezing operator
+        """
+        return self._squeezing_operator(zeta)[:self.size,:self.size]
     
 class DisplacedAnharmonicOscillator:
     """Hamiltonian for a displaced anharmonic oscillator
@@ -190,11 +239,41 @@ class DisplacedAnharmonicOscillator:
             f = oscillator_1d(vec,x)
             ax.plot(x,f**2+ev)
 
+    def set_eig(self,*,hermitian=True):
+        """Use eigensolver to find all eigenvalues
+
+        Keyword Args:
+            hermitian (bool) : True if self.ham is Hermitian
+"""
+        if hermitian:
+            eigvals, eigvecs = eigh(self.ham)
+        else:
+            eigvals, eigvecs = eig(self.ham)
+        sort_indices = eigvals.argsort()
+        eigvals.sort()
+        eigvecs = eigvecs[:,sort_indices]
+        # I choose to pick the phase of my eigenvectors such that the state
+        # which has the largest overlap has a positive overlap. For
+        # sufficiently small d, and alpha close to 1, this will be the
+        # overlap between the same excited and ground states.
+        for i in range(eigvals.size):
+            max_index = np.argmax(np.abs(eigvecs[:,i]))
+            if eigvecs[max_index,i] < 0:
+                eigvecs[:,i] *= -1
+        self.eigvecs = eigvecs
+        if np.max(np.imag(eigvals)) > 1E-12:
+            warnings.warn('Eigenvalues are not fully real')
+            self.eigvals = eigvals
+        else:
+            self.eigvals = np.real(eigvals)
+
     def set_eigs(self,num,*,hermitian=True):
         """Use sparse eigensolver to find the bottom specified eigenvalues
 
         Args:
             num (int): number of eigenvalues to find
+        Keyword Args:
+            hermitian (bool) : True if self.ham is Hermitian
 """
         if hermitian:
             eigvals, eigvecs = eigsh(self.ham,k=num,which='SM')
@@ -218,71 +297,186 @@ class DisplacedAnharmonicOscillator:
         else:
             self.eigvals = np.real(eigvals)
 
+    def displaced_squeezed_state(self,state,alpha,zeta):
+        """Takes in a wavefunction and applies first the squeeze operator,
+            followed by the displacement operator
+        
+        Args:
+            state (np.ndarray) : wavefunction
+            alpha (complex) : complex displacement
+            zeta (complex) : complex squeezing
+            
+        Returns:
+            (np.ndarray) : displaced and squeezed wavefunction
+        """
+        L = LadderOperators(self.size,disp=0)
+        D = L.displacement_operator(alpha)
+        S = L.squeezing_operator(zeta)
+        return D.dot(S.dot(state))
+
     def displaced_vacuum(self,*,disp = 1):
         """Create a displaced vacuum state relative to an unshifted potential
 """
-        L = LadderOperators(self.size,disp=0)
-        vac = np.zeros(L.calculation_size)
+        vac = np.zeros(self.size)
         vac[0] = 1
-        disp_oper = expm(disp * L._ad + np.conjugate(disp) * L._a)
-        disp_vac = disp_oper.dot(vac)
-        disp_vac = disp_vac[:L.size]
-        return disp_vac
+        return self.displacced_squeezed_state(vac,disp,0)
 
     def time_evolution(self,state,time):
-        """Evolves a state forward in time using thee eigensystem
+        """Evolves a state forward in time using the eigensystem
 """
         basis_change = self.eigvecs
         state = np.conjugate(basis_change.T).dot(state)
-        time_oper = np.exp(1j * self.eigvals * time)
+        time_oper = np.exp(-1j * self.eigvals * time)
         state = state * time_oper
         state = basis_change.dot(state)
         return state
 
-    def animate_wavepacket(self,*,disp = 1,x=np.arange(-3,3,0.01),t=np.arange(0,2*np.pi,np.pi/30)):
-        disp_vac = self.displaced_vacuum(disp = disp)
+    def animate_wavepacket(self,state,*,x=np.arange(-3,3,0.01),
+                           t=np.arange(0,2*np.pi,np.pi/30)):
         fig, ax = plt.subplots()
         ax.plot(x,self.potential(x))
         fig.subplots_adjust(bottom=0.4)
         t_ax = fig.add_axes([0.1,0.05,0.65,0.02])
         t_slider = Slider(t_ax, 'time', 0, t[-1],valinit=0)
 
-        psi = oscillator_1d(disp_vac,x)
+        psi = oscillator_1d(state,x)
 
         line_r, line_i, line_abs, = ax.plot(x,np.real(psi)*2+2,
                                             x,np.imag(psi)*2+2,
                                             x,np.abs(psi)*2+2)
         
         def update(val):
-            t = t_slider.val
-            psi = oscillator_1d(self.time_evolution(disp_vac,t),x)
+            tval = t_slider.val
+            psi = oscillator_1d(self.time_evolution(state,tval),x)
             line_r.set_ydata(np.real(psi)*2+2)
             line_i.set_ydata(np.imag(psi)*2+2)
             line_abs.set_ydata(np.abs(psi)*2+2)
         t_slider.on_changed(update)
 
-class Polymer:
-    """Creates the Hamiltonian and other useful operators describing a 
-        Polymer of two-level systems (2LS)
+    def get_mean_x(self,t,state):
+        """Calculates expectation value and uncertainty in operator x
+
+        Args:
+            t (np.ndarray) : times to calculate expectation values
+            state (np.ndarray) : wavefunction at time t = 0
+
+        Returns:
+            (tuple) : expectation value of x and associated uncertainty
+        """
+        LO = LadderOperators(self.size)
+        x = LO.x
+        x2 = LO.x_power_n(2)
+        return self.get_mean_and_Delta(t,state,x,op2=x2)
+
+    def get_mean_p(self,t,state):
+        """Calculates expectation value and uncertainty in operator p
+
+        Args:
+            t (np.ndarray) : times to calculate expectation values
+            state (np.ndarray) : wavefunction at time t = 0
+
+        Returns:
+            (tuple) : expectation value of p and associated uncertainty
+        """
+        LO = LadderOperators(self.size)
+        p = LO.p
+        p2 = LO.p_power_n(2)
+        return self.get_mean_and_Delta(t,state,p,op2=p2)
     
+    def get_mean_N(self,t,state):
+        """Calculates expectation value and uncertainty in operator N
+            (mean number of excitations)
+
+        Args:
+            t (np.ndarray) : times to calculate expectation values
+            state (np.ndarray) : wavefunction at time t = 0
+
+        Returns:
+            (tuple) : expectation value of N and associated uncertainty
+        """
+        LO = LadderOperators(self.size)
+        N = LO.N
+        N2 = np.dot(LO._N,LO._N)[:self.size,:self.size]
+        return self.get_mean_and_Delta(t,state,N,op2=N2)
+    
+    def get_mean_and_Delta(self,t,state,op,*,op2='auto'):
+        """Calculates expectation value and uncertainty in operator "op"
+
+        Args:
+            t (np.ndarray) : times to calculate expectation values
+            state (np.ndarray) : wavefunction at time t = 0
+            op (np.ndarray) : operator to calculate expectation value
+
+        Keyword Args:
+            op2 (np.ndarray) : square of the operator; if set to 'auto', 
+                calculates op^2 using op
+        Returns:
+            (tuple) : expectation value and associated uncertainty
+        """
+        if type(op2) is str:
+            if op2 == 'auto':
+                op2 = np.dot(op,op)
+        mean_op = np.zeros(t.size)
+        var_op = np.zeros(t.size)
+        for i in range(t.size):
+            psi = self.time_evolution(state,t[i])
+            op_psi = op.dot(psi)
+            op2_psi = op2.dot(psi)
+            mean_op[i] = np.real(np.dot(np.conjugate(psi),op_psi))
+            var_op[i] = np.real(np.dot(np.conjugate(psi),op2_psi))
+
+        Delta_op = np.sqrt(var_op - mean_op**2)
+
+        return mean_op, Delta_op
+
+    def plot_mean(self,t,mean,Delta):
+        plt.figure()
+        plt.plot(t,mean,'k')
+        plt.plot(t,mean+Delta,'--k')
+        plt.plot(t,mean-Delta,'--k')
+
+
+class Polymer:
+    """Creates the Hamiltonian and other useful operators describing a
+        Polymer of two-level systems (2LS) or three-level systems (3LS)
+
     Attributes:
-        num_sites (int): number of two level systems
-        energies (list): excitation energy of each 2LS if it were isolated
-        couplings (list): energetic couplings between singly-
-            excited electronic states in the site basis, ordered as
-            [J12,J13,...,J1N,J23,...,J2N,...]
+        If system is a polymer of two-level systems:
+            num_sites (int): number of two level systems
+            energies (list): excitation energy of each 2LS if it were isolated
+            couplings (list): energetic couplings between singly-
+                excited electronic states in the site basis, ordered as
+                [J12,J13,...,J1N,J23,...,J2N,...]
+
+
         pols (list): set to value ['x','y','z']
-        N (int): size of each 2LS (set to value 2)
+        N (int): size of each 2LS (set to value 2 for 2LS)
         up (np.ndarray): raising operator for a 2LS
         down (np.ndarray): lowering operator for a 2LS
         ii (np.ndarray): identity operator for a 2LS
         occupied (np.ndarray): occupation operator for a 2LS
         empty (np.ndarray): ii - occupied
+
+        If system is a polymer of three-level systems:
+            num_sites (int) : number of three level systems
+            energies (list) : one list, where each element is itself a list of two elements, the first being the
+                first excitation energy 'e' of each 3LS, the second being the
+                second excitation energy 'f', written as [[e1,f1],[e2,f2]...[en,fn]]
+            couplings (list) : couplings between singly-excited states in the site
+                basis (the J_ij coupling), between doubly excited states (K_ij) and between triply excited
+                states (L_ij). They are ordered as a list of matrices instead of a single list as for 2LS
+                [[J11, J12, J13,..., J1n], [J21, J22,..., J2n],..., [Jn1,..., Jn(n-1), Jnn]]
+                [[K11, K12, K13,..., K1n], [K21, K22,..., K2n],..., [Kn1,..., Kn(n-1), Knn]]
+                [[L11, L12, L13,..., L1n], [L21, L22,..., L2n],..., [Ln1,..., Ln(n-1), Lnn]].
+                # The following rule is always true for all O= J,K,L elements: O_mn = O_nm* where the *
+                is the complex conjugate
+
 """
 
-    def __init__(self,site_energies,site_couplings,dipoles):
+    def __init__(self, site_energies, site_couplings, dipoles,*,
+                 maximum_manifold='auto'):
         """This initializes an object with an arbitrary number of
-        coupled two-level systems
+        coupled two- or three-level systems, depending on N
 
         Args:
             site_energies (list): excitation energies of individual sites
@@ -290,24 +484,85 @@ class Polymer:
                 excited electronic states in the site basis, ordered as
                 [J12,J13,...,J1N,J23,...,J2N,...]
 """
+
         self.num_sites = len(site_energies)
-        self.energies = site_energies
-        self.couplings = site_couplings
+
+        if isinstance(site_energies[0], list):
+            self.N = 3
+        else:
+            self.N = 2
+            self.energies = site_energies
+            self.couplings = site_couplings
+
+        self.maximum_manifold = self.num_sites * (self.N - 1)
+
+        if maximum_manifold == 'auto':
+            self.set_electronic_total_occupation_number()
+        else:
+            self.maximum_manifold = min(maximum_manifold,self.maximum_manifold)
+
+        if self.N == 3:
+            self.energies = []
+            self.double_energies = []
+            for i in range(self.num_sites):
+                egy = site_energies[i][0]  # list of first excitation energies
+                self.energies.append(egy)
+                egy = site_energies[i][1]  # list of second excitation energies
+                self.double_energies.append(egy)
+            # Couplings matrices for 3LS
+            if self.num_sites == 1:
+                self.J_list = []
+                self.K_list = []
+                self.L_list = []
+            elif isinstance(site_couplings[0][0], list) or isinstance(site_couplings[0][0], np.ndarray):
+                self.J_list = []
+                self.K_list = []
+                self.L_list = []
+                for i in range(self.num_sites):
+                    for j in range(i+1,self.num_sites):
+                        self.J_list.append(site_couplings[0][i][j])
+                        self.K_list.append(site_couplings[1][i][j])
+                        self.L_list.append(site_couplings[2][i][j])
+            else:
+                self.J_list = site_couplings[0]
+                self.K_list = site_couplings[1]
+                self.L_list = site_couplings[2]
+
         self.dipoles = dipoles
-        self.pols = ['x','y','z']
+        self.pols = ['x', 'y', 'z']
 
         ### Operators that define a single two-level system (2LS)
-        self.N = 2 # one of the key ingedients that makes this a 2LS
 
-        self.up = self.basis(1,0)
+        self.up = self.basis(1, 0)  # a_dagger
 
-        self.down = self.basis(0,1)
+        self.down = self.basis(0, 1)  # a
 
         self.ii = np.eye(self.N)
 
-        self.occupied = self.basis(1,1)
+        self.occupied = self.basis(1, 1)  # this state being in excited state
 
-        self.empty = self.basis(0,0)
+        self.empty = self.basis(0, 0)
+
+        # For a 3LS
+
+        if self.N == 3:
+            self.up10 = self.basis(1, 0)  # a_dagger
+
+            self.up20 = self.basis(2, 0)  # b_dagger
+
+            self.up21 = self.basis(2, 1)  # c_dagger
+
+            self.down01 = self.basis(0,1) # a
+
+            self.down02 = self.basis(0, 2)  # b
+
+            self.down12 = self.basis(1, 2)  # c
+
+            self.occupied_1 = self.basis(1, 1)
+
+            self.occupied_2 = self.basis(2, 2)
+
+            self.empty = self.basis(0, 0)
 
         ### Kron up the single 2LS operators to act on the full Hilbert space of the polymer
 
@@ -317,30 +572,52 @@ class Polymer:
         self.set_empty_list()
         self.set_exchange_list()
 
-        ### Make Hamiltonian (total and by manifold)
-        
+        # For 3LS
+        if self.N == 3:
+            self.set_doubly_occupied_list()
+            self.set_exchange_list_G()
+            self.set_exchange_list_GG()
+            self.set_exchange_list_C()
+            self.set_up10_list()
+            self.set_up21_list()
+            self.set_up20_list()
+            self.set_down01_list()
+            self.set_down12_list()
+            self.set_down02_list()
+
+        ## Make Hamiltonian (total and by manifold)
+
         self.set_electronic_hamiltonian()
-        self.set_electronic_total_occupation_number()
 
         self.make_mu_dict_site_basis()
         self.make_mu_site_basis('x')
         self.make_mu_up_dict_site_basis()
         self.make_mu_up_site_basis('x')
+        self.make_mu_up_site_basis('y')
+        self.make_mu_up_site_basis('z')
+
+        self.make_mu_up_3d()
 
         self.set_manifold_eigensystems()
         self.set_electronic_eigensystem()
-        
 
-    def basis(self,row,col):
+    def basis(self, row, col):
         """Matrix basis for a single two-level system
 """
-        b = np.zeros((self.N,self.N))
-        b[row,col] = 1
+        b = np.zeros((self.N, self.N))
+        b[row, col] = 1
         return b
 
     ### Tools for making the basic operators in the polymer space
 
-    def electronic_identity_kron(self,element_list):
+    def make_HI_i(self, H_i):
+        self.HI = []
+        for i in range(len(self.H_i)):
+            self.HI_i = self.electronic_identity_kron([(self.H_i[i], i)])
+            self.HI.append(self.HI_i)
+        return self.HI
+
+    def electronic_identity_kron(self, element_list):
         """Takes in a list of tuples (element, position) and krons
             them up into the full space (element is assumed to be
             a 2x2 array acting on a single 2LS.  Any positions that
@@ -365,228 +642,402 @@ class Polymer:
             matrix_list[pos] = el
         return self.recursive_kron(matrix_list)
 
-    def recursive_kron(self,list_of_matrices):
-        """Krons together a list of matrices
+    def recursive_kron(self, list_of_matrices):
+        """Krons together a list of matrices, and removes indices corresponding to
+            excitations that are above the maximum_manifold Attribute
         Args:
             list_of_matrices (list): list of np.ndarrays
         Returns:
-            the kronecker product of all the input matrices
+            the kronecker product of all the input matrices, of size H_dim x H_dim,
+                (H_dim is an Attribute, set by this method)
 """
+        list_of_excitations = [np.arange(self.N)]*self.num_sites
+        ex = list_of_excitations.pop(0)
         mat = list_of_matrices.pop(0)
+        ex, mat = self.remove_higher_excitations(ex, mat)
         n = len(list_of_matrices)
-        for next_item in list_of_matrices:
-            mat = np.kron(mat,next_item)
+        for next_item,next_ex in zip(list_of_matrices,list_of_excitations):
+            mat = np.kron(mat, next_item)
+            ex = self.kron_add1d(ex,next_ex)
+            ex, mat = self.remove_higher_excitations(ex, mat)
+        self.electronic_total_occupation_number = ex
+        self.H_dim = ex.size
         return mat
 
-    def make_single_operator_list(self,O):
+    def kron_add1d(self,a,b):
+        """Adds two vectors from different spaces by creating a larger space in which 
+            to add them, using the kronecker product with vectors of ones
+        Args:
+            a (1d np.ndarray): 1d array
+            b (1d np.ndarray): 1d array
+        Returns:
+            sum of a and b in a new space
+"""
+        a_ones = np.ones(a.size)
+        b_ones = np.ones(b.size)
+        return np.kron(a,b_ones) + np.kron(a_ones,b)
+
+    def remove_higher_excitations(self,excitations,matrix):
+        """Finds entries corresponding to excitation numbers above the maximum_manifold
+            Attribute, and removes them both from the list of excitations, as well as
+            from the input matrix.
+        Args:
+            excitations (1d np.ndarray): list of excitation number associated with each
+                index of the matrix
+            matrix (2d np.ndarray): a 2d square array
+        Returns:
+            (excitations, matrix) trimmed down to only contained the allowed number of
+                excitations
+"""
+        inds = np.where(excitations <= self.maximum_manifold)[0]
+        excitations = excitations[inds]
+        matrix = matrix[inds,:]
+        matrix = matrix[:,inds]
+        return excitations, matrix
+
+    def make_single_operator_list(self, O):
         """Make a list of full-space operators for a given 2x2 operator,
-            by taking tensor product with identities on the other 
+            by taking tensor product with identities on the other
             excitations
 """
         O_list = []
         for i in range(self.num_sites):
-            Oi = self.electronic_identity_kron([(O,i)])
+            Oi = self.electronic_identity_kron([(O, i)])
             O_list.append(Oi)
         return O_list
 
-    def make_multi_operator_list(self,o_list):
-        """Make a list of full-space operators for a given set of 2x2 
+    def make_multi_operator_list(self, o_list):
+        """Make a list of full-space operators for a given set of 2x2
             operators by inserting the necessary identities
 """
         O_list = []
-        positions = itertools.combinations(range(self.num_sites),len(o_list))
+        positions = itertools.combinations(range(self.num_sites), len(o_list))
         for pos_tuple in positions:
-            Oi = self.electronic_identity_kron(list(zip(o_list,pos_tuple)))
+            Oi = self.electronic_identity_kron(list(zip(o_list, pos_tuple)))
             O_list.append(Oi)
         return O_list
 
     def set_occupied_list(self):
         self.occupied_list = self.make_single_operator_list(self.occupied)
 
+    def set_doubly_occupied_list(self):
+        self.doubly_occupied_list = self.make_single_operator_list(self.occupied_2)
+
     def set_up_list(self):
         self.up_list = self.make_single_operator_list(self.up)
+
+    def set_up10_list(self):
+        self.up10_list = self.make_single_operator_list(self.up10)
+
+    def set_up21_list(self):
+        self.up21_list = self.make_single_operator_list(self.up21)
+
+    def set_up20_list(self):
+        self.up20_list = self.make_single_operator_list(self.up20)
+
+    def set_down01_list(self):
+        self.down01_list = self.make_single_operator_list(self.down01)
+
+    def set_down12_list(self):
+        self.down12_list = self.make_single_operator_list(self.down12)
+
+    def set_down02_list(self):
+        self.down02_list = self.make_single_operator_list(self.down02)
 
     def set_down_list(self):
         self.down_list = self.make_single_operator_list(self.down)
 
     def set_empty_list(self):
         self.empty_list = self.make_single_operator_list(self.empty)
-    
+
     def set_exchange_list(self):
-        self.exchange_list = self.make_multi_operator_list([self.up,self.down])
+        self.exchange_list = self.make_multi_operator_list([self.up, self.down])  # a_dagger*a
+
+    def set_exchange_list_G(self):
+        self.exchange_list_G = self.make_multi_operator_list([self.up21, self.down])  # c_dagger * a
+
+    def set_exchange_list_GG(self):
+        self.exchange_list_GG = self.make_multi_operator_list([self.down, self.up21])  #
+
+    def set_exchange_list_C(self):
+        self.exchange_list_C = self.make_multi_operator_list([self.up21, self.down12])  # c_dagger * c
+
+    def set_mono_H_list(self):
+        self.mono_list = self.make_single_operator_list(self.H_i)
 
     ### Tools for moving back and forth between full Hamiltonian and manifold(s)
 
-    def electronic_vector_of_ones_kron(self,position,item):
+    def electronic_vector_of_ones_kron(self, position, item):
         n = self.num_sites
-        ones_list = [np.ones(self.N) for i in range(n-1)]
-        ones_list.insert(position,item)
+        ones_list = [np.ones(self.N) for i in range(n - 1)]
+        ones_list.insert(position, item)
         vec = ones_list.pop(0)
         for next_item in ones_list:
-            vec = np.kron(vec,next_item)
+            vec = np.kron(vec, next_item)
         return vec
 
     def set_electronic_total_occupation_number(self):
         n = self.num_sites
         single_mode_occ = np.arange(self.N)
-        occ_num = self.electronic_vector_of_ones_kron(0,single_mode_occ)
-        for i in range(1,n):
-            occ_num += self.electronic_vector_of_ones_kron(i,single_mode_occ)
+        occ_num = self.electronic_vector_of_ones_kron(0, single_mode_occ)
+        for i in range(1, n):
+            occ_num += self.electronic_vector_of_ones_kron(i, single_mode_occ)
+        self.H_dim = occ_num.size
         self.electronic_total_occupation_number = occ_num
 
-    def electronic_manifold_mask(self,manifold_num):
+    def electronic_manifold_mask(self, manifold_num):
         """Creates a boolean mask to describe which states obey the truncation
            size collectively
 """
         manifold_inds = np.where(self.electronic_total_occupation_number == manifold_num)[0]
         return manifold_inds
 
-    def electronic_subspace_mask(self,min_occ_num,max_occ_num):
-        """Creates a boolean mask to describe which states obey the range of 
+    def electronic_subspace_mask(self, min_occ_num, max_occ_num):
+        """Creates a boolean mask to describe which states obey the range of
             electronic occupation collectively
 """
         manifold_inds = np.where((self.electronic_total_occupation_number >= min_occ_num) &
                                  (self.electronic_total_occupation_number <= max_occ_num))[0]
         return manifold_inds
 
-    def extract_coherence(self,O,manifold1,manifold2):
+    def extract_coherence(self, O, manifold1, manifold2):
         """Returns result of projecting the Operator O onto manifold1
             on the left and manifold2 on the right
 """
         manifold1_inds = self.electronic_manifold_mask(manifold1)
         manifold2_inds = self.electronic_manifold_mask(manifold2)
-        O = O[manifold1_inds,:]
-        O = O[:,manifold2_inds]
+        O = O[manifold1_inds, :]
+        O = O[:, manifold2_inds]
         return O
-    
-    def extract_manifold(self,O,manifold_num):
+
+    def extract_manifold(self, O, manifold_num):
         """Projects operator into the given electronic excitation manifold
 """
-        return self.extract_coherence(O,manifold_num,manifold_num)
+        return self.extract_coherence(O, manifold_num, manifold_num)
 
-    def coherence_to_full(self,O,manifold1,manifold2):
+    def coherence_to_full(self, O, manifold1, manifold2):
         """Creates an array of zeros of the size of the full Hilbert space,
             and fills the correct entries with the operator O existing in
             a particular optical coherence between manifolds
 """
-        Ofull = np.zeros(self.electronic_hamiltonian.shape,dtype=O.dtype)
+        Ofull = np.zeros(self.electronic_hamiltonian.shape, dtype=O.dtype)
         manifold1_inds = self.electronic_manifold_mask(manifold1)
         manifold2_inds = self.electronic_manifold_mask(manifold2)
         for i in range(manifold2_inds.size):
             ind = manifold2_inds[i]
-            Ofull[manifold1_inds,ind] = O[:,i]
+            Ofull[manifold1_inds, ind] = O[:, i]
         return Ofull
-    
-    def manifold_to_full(self,O,manifold_num):
+
+    def manifold_to_full(self, O, manifold_num):
         """Creates an array of zeros of the size of the full Hilbert space,
             and fills the correct entries with the operator O existing in
             a single optical manifold
 """
-        return self.coherence_to_full(O,manifold_num,manifold_num)
+        return self.coherence_to_full(O, manifold_num, manifold_num)
 
-    def extract_electronic_subspace(self,O,min_occ_num,max_occ_num):
+    def extract_electronic_subspace(self, O, min_occ_num, max_occ_num):
         """Projects operator into the given electronic excitation manifold(s)
 """
-        manifold_inds = self.electronic_subspace_mask(min_occ_num,max_occ_num)
-        O = O[manifold_inds,:]
-        O = O[:,manifold_inds]
+        manifold_inds = self.electronic_subspace_mask(min_occ_num, max_occ_num)
+        O = O[manifold_inds, :]
+        O = O[:, manifold_inds]
         return O
 
-    
+    def truncate_operator(self, O, pdc):
+        """ Truncates operator O to the subspace of the maximum reachable manifold ,
+        given the phase-discrimination condition
+        """
+        if isinstance(pdc[0], tuple):
+            pdc_list = []
+            for i in pdc:
+                pdc_list += list(i)
+
+            spectroscopy_order = sum(pdc_list)
+
+        else:
+            spectroscopy_order = sum(pdc)
+
+        if (spectroscopy_order)%2 == 1:
+            maximum_manifold = (spectroscopy_order +1)/2
+        else:
+            maximum_manifold = (spectroscopy_order)/2
+
+        self.truncated_O = self.extract_electronic_subspace(O,0,maximum_manifold)
+
+        return self.truncated_O
+
     ### Tools for making the Hamiltonian
 
     def make_electronic_hamiltonian(self):
-        ham = self.energies[0] * self.occupied_list[0]
-        for i in range(1,self.num_sites):
-            ham += self.energies[i] * self.occupied_list[i]
+        if self.N == 2:
+            ham = self.energies[0] * self.occupied_list[0]
+            for i in range(1, self.num_sites):
+                ham += self.energies[i] * self.occupied_list[i]
 
-        for i in range(len(self.exchange_list)):
-            ham += self.couplings[i] * self.exchange_list[i]
-            ham += np.conjugate(self.couplings[i]) * self.exchange_list[i].T
+            for i in range(len(self.exchange_list)):
+                ham += self.couplings[i] * self.exchange_list[i]
+                ham += np.conjugate(self.couplings[i]) * self.exchange_list[i].T
 
-        return ham
+            return ham
+        if self.N == 3:
+
+            self.H_i = []
+            self.H1 = np.zeros((self.H_dim,self.H_dim))
+            self.H2 = np.zeros((self.H_dim,self.H_dim))
+            self.H3 = np.zeros((self.H_dim,self.H_dim))
+
+            for i in range(self.num_sites):
+                self.mono_H = np.zeros((self.N, self.N))
+                self.mono_H[1][1] = self.energies[i]
+                self.mono_H[2][2] = self.double_energies[i]
+                self.H_i.append(self.mono_H)
+
+            self.HI = self.make_HI_i(self.H_i)
+
+            self.H0 = np.zeros((self.H_dim,self.H_dim))
+
+            for i in range(len(self.HI)):
+                self.H0 += self.HI[i]
+
+            for i in range(len(self.exchange_list)):
+                self.H1 += self.J_list[i] * self.exchange_list[i]
+                self.H1 += np.conjugate(self.J_list[i]) * self.exchange_list[i].T
+
+                self.H2 += self.K_list[i] * (self.exchange_list_G[i] + self.exchange_list_GG[i].T)
+                self.H2 += np.conjugate(self.K_list[i]) * (self.exchange_list_G[i].T + self.exchange_list_GG[i])
+
+                self.H3 += self.L_list[i] * self.exchange_list_C[i]
+                self.H3 += np.conjugate(self.L_list[i]) * self.exchange_list_C[i].T
+
+            electronic_hamiltonian = self.H0 + self.H1 + self.H2 + self.H3
+
+            return electronic_hamiltonian
 
     def set_electronic_hamiltonian(self):
         self.electronic_hamiltonian = self.make_electronic_hamiltonian()
+        return self.electronic_hamiltonian
 
-    def get_electronic_hamiltonian(self,*,manifold_num = 'all'):
+    def get_electronic_hamiltonian(self, *, manifold_num='all'):
         if manifold_num == 'all':
-            return self.electronic_hamiltonian
+            return self.make_electronic_hamiltonian()
         else:
-            return self.extract_manifold(self.electronic_hamiltonian,manifold_num)
-    
+            return self.extract_manifold(self.electronic_hamiltonian, manifold_num)
 
     ### Tools for diagonalizing the Hamiltonian
 
-    def make_manifold_eigensystem(self,manifold_num):
-        h = self.get_electronic_hamiltonian(manifold_num = manifold_num)
+    def make_manifold_eigensystem(self, manifold_num):
+        h = self.get_electronic_hamiltonian(manifold_num=manifold_num)
         e, v = np.linalg.eigh(h)
         sort_inds = e.argsort()
         e = e[sort_inds]
-        v = v[:,sort_inds]
-        return e,v
+        v = v[:, sort_inds]
+        return e, v
 
     def set_manifold_eigensystems(self):
         self.electronic_eigenvalues_by_manifold = []
         self.electronic_eigenvectors_by_manifold = []
-        for i in range(self.num_sites+1):
-            e,v = self.make_manifold_eigensystem(i)
+        for i in range(self.num_sites + 1):
+            e, v = self.make_manifold_eigensystem(i)
             self.electronic_eigenvalues_by_manifold.append(e)
             self.electronic_eigenvectors_by_manifold.append(v)
 
-    def get_eigensystem_by_manifold(self,manifold_num):
+    def get_eigensystem_by_manifold(self, manifold_num):
         e = self.electronic_eigenvalues_by_manifold[manifold_num]
         v = self.electronic_eigenvectors_by_manifold[manifold_num]
-        return e,v
+        return e, v
 
     def set_electronic_eigensystem(self):
         H = self.electronic_hamiltonian
         eigvecs = np.zeros(H.shape)
         d = np.zeros(H.shape)
-        for i in range(self.num_sites+1):
-            e,v = self.get_eigensystem_by_manifold(i)
-            if i ==1:
+        for i in range(self.num_sites + 1):
+            e, v = self.get_eigensystem_by_manifold(i)
+            if i == 1:
                 self.exciton_energies = e
-            eigvecs += self.manifold_to_full(v,i)
-            d += self.manifold_to_full(np.diag(e),i)
+            eigvecs += self.manifold_to_full(v, i)
+            d += self.manifold_to_full(np.diag(e), i)
         Hd = eigvecs.T.dot(H.dot(eigvecs))
-        if np.allclose(Hd,d):
+        if np.allclose(Hd, d):
             pass
         else:
             raise Exception('Diagonalization by manifold failed')
 
         self.electronic_eigenvectors = eigvecs
         self.electronic_eigenvalues = d.diagonal()
-    
 
     ### Tools for making the dipole operator
-        
-    def make_mu_site_basis(self,pol):
-        pol_dict = {'x':0,'y':1,'z':2}
-        d = self.dipoles[:,pol_dict[pol]]
-        self.mu = d[0]*(self.up_list[0] + self.down_list[0])
-        for i in range(1,len(self.up_list)):
-            self.mu += d[i]*(self.up_list[i] + self.down_list[i])
+
+    def make_mu_site_basis(self, pol):
+        if self.N == 2:
+            pol_dict = {'x': 0, 'y': 1, 'z': 2}
+            d = self.dipoles[:, pol_dict[pol]]
+            self.mu = d[0] * (self.up_list[0] + self.down_list[0])
+            for i in range(1, len(self.up_list)):
+                self.mu += d[i] * (self.up_list[i] + self.down_list[i])
+
+        elif self.N == 3:
+            pol_dict = {'x': 0, 'y': 1, 'z': 2}
+            d = self.dipoles[..., pol_dict[pol]]
+            self.mu_10_01 = d[0,0] * (self.up10_list[0].copy() + self.down01_list[0].copy())
+            self.mu_21_12 = d[0,1] * (self.up21_list[0].copy() + self.down12_list[0].copy())
+            self.mu_20_02 = d[0,2] * (self.up20_list[0].copy() + self.down02_list[0].copy())
+            for i in range(1, len(self.up10_list)):
+                self.mu_10_01 += d[i,0] * (self.up10_list[i] + self.down01_list[i])
+                self.mu_21_12 += d[i,1] * (self.up21_list[i] + self.down12_list[i])
+                self.mu_20_02 += d[i,2] * (self.up20_list[i] + self.down02_list[i])
+            self.mu = self.mu_10_01 + self.mu_21_12 + self.mu_20_02
 
     def make_mu_dict_site_basis(self):
-        self.mu_dict = dict()
-        for pol in self.pols:
-            self.make_mu_site_basis(pol)
-            self.mu_dict[pol] = self.mu.copy()
+        if self.N == 2:
+            self.mu_dict = dict()
+            for pol in self.pols:
+                self.make_mu_site_basis(pol)
+                self.mu_dict[pol] = self.mu.copy()
 
-    def make_mu_up_site_basis(self,pol):
-        pol_dict = {'x':0,'y':1,'z':2}
-        d = self.dipoles[:,pol_dict[pol]]
-        self.mu_ket_up = self.up_list[0].copy()*d[0]
-        for i in range(1,len(self.up_list)):
-            self.mu_ket_up += self.up_list[i]*d[i]
+        elif self.N == 3 :
+            self.mu_dict = dict()
+            for pol in self.pols:
+                self.make_mu_site_basis(pol)
+                self.mu_dict[pol] = self.mu.copy()
+
+    def make_mu_up_site_basis(self, pol):
+        if self.N == 2:
+            pol_dict = {'x': 0, 'y': 1, 'z': 2}
+            d = self.dipoles[:, pol_dict[pol]]
+            self.mu_ket_up = self.up_list[0].copy() * d[0]
+            for i in range(1, len(self.up_list)):
+                self.mu_ket_up += self.up_list[i] * d[i]
+
+        elif self.N == 3:
+            pol_dict = {'x': 0, 'y': 1, 'z': 2}
+            d = self.dipoles[..., pol_dict[pol]]
+            self.mu_ket_up10 = self.up10_list[0].copy() * d[0, 0]
+            self.mu_ket_up21 = self.up21_list[0].copy() * d[0, 1]
+            self.mu_ket_up20 = self.up20_list[0].copy() * d[0, 2]
+            for i in range(1, len(self.up10_list)):
+                self.mu_ket_up10 += self.up10_list[i] * d[i, 0]
+                self.mu_ket_up21 += self.up21_list[i] * d[i, 1]
+                self.mu_ket_up20 += self.up20_list[i] * d[i, 2]
+            self.mu_ket_up = self.mu_ket_up10 + self.mu_ket_up21 + self.mu_ket_up20
 
     def make_mu_up_dict_site_basis(self):
-        self.mu_up_dict = dict()
-        for pol in self.pols:
-            self.make_mu_up_site_basis(pol)
-            self.mu_up_dict[pol] = self.mu_ket_up.copy()
-            
+        if self.N == 2:
+            self.mu_up_dict = dict()
+            for pol in self.pols:
+                self.make_mu_up_site_basis(pol)
+                self.mu_up_dict[pol] = self.mu_ket_up.copy()
+        if self.N == 3:
+            self.mu_up_dict = dict()
+            for pol in self.pols:
+                self.make_mu_up_site_basis(pol)
+                self.mu_up_dict[pol] = self.mu_ket_up.copy()
+
+
+    def make_mu_up_3d(self):
+        self.mu_up_3d = np.zeros((self.H_dim,self.H_dim,3))
+        self.mu_up_3d[:, :, 0] = self.mu_up_dict['x']
+        self.mu_up_3d[:, :, 1] = self.mu_up_dict['y']
+        self.mu_up_3d[:, :, 2] = self.mu_up_dict['z']
 
 class PolymerVibrations():
     def __init__(self,yaml_file,*,mask_by_occupation_num=True,
@@ -603,16 +1054,22 @@ class PolymerVibrations():
         self.save_path = os.path.join(self.base_path,'closed')
         os.makedirs(self.save_path,exist_ok=True)
 
-        self.Polymer = Polymer(params['site_energies'],params['site_couplings'],np.array(params['dipoles']))
+        try:
+            max_manifold = params['maximum_manifold']
+        except:
+            max_manifold = 'auto'
+
+        try:
+            self.RWA = params['RWA']
+        except KeyError:
+            self.RWA = True
+
+        self.Polymer = Polymer(params['site_energies'],params['site_couplings'],
+                               np.array(params['dipoles']),maximum_manifold=max_manifold)
+
+        self.maximum_manifold = self.Polymer.maximum_manifold
         
         self.truncation_size = params['initial truncation size']
-        try:
-            self.maximum_manifold = params['maximum_manifold']
-        except:
-            self.maximum_manifold = np.inf
-        
-        self.maximum_manifold = min(self.maximum_manifold,
-                                    self.Polymer.num_sites)
 
         if separable_manifolds == 'auto':
             try:
@@ -722,16 +1179,16 @@ class PolymerVibrations():
 
         self.total_hamiltonian = self.total_hamiltonian + self.vibrational_hamiltonian
 
-    def add_linear_couplings(self):
-        self.linear_coupling_hamiltonian = np.zeros(self.total_hamiltonian.shape)
+    # def add_linear_couplings(self):
+    #     self.linear_coupling_hamiltonian = np.zeros(self.total_hamiltonian.shape)
 
-        for i in range(self.num_vibrations):
-            try:
-                coupling_list = self.params['vibrations'][i]['linear_couplings']
-                self.linear_coupling_hamiltonian += self.linear_site_vibrational_couplings(i,manifold_num)
-            except KeyError:
-                pass
-        self.total_hamiltonian = self.total_hamiltonian + self.linear_coupling_hamiltonian
+    #     for i in range(self.num_vibrations):
+    #         try:
+    #             coupling_list = self.params['vibrations'][i]['linear_couplings']
+    #             self.linear_coupling_hamiltonian += self.linear_site_vibrational_couplings(i,manifold_num)
+    #         except KeyError:
+    #             pass
+    #     self.total_hamiltonian = self.total_hamiltonian + self.linear_coupling_hamiltonian
 
     def set_vibrations(self):
         vibration_params = self.params['vibrations']
@@ -797,18 +1254,18 @@ class PolymerVibrations():
         O = O.transpose()
         return O
 
-    def linear_site_vibrational_couplings(self,mode_num):
-        mode_dict = self.params['vibrations'][mode_num]
-        coupling_list = mode_dict['linear_couplings']
-        coupling_strength, site_index_pair = coupling_list[0]
-        vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num)
-        coupling_ham =  vib_coupling * coupling_strength
+    # def linear_site_vibrational_couplings(self,mode_num):
+    #     mode_dict = self.params['vibrations'][mode_num]
+    #     coupling_list = mode_dict['linear_couplings']
+    #     coupling_strength, site_index_pair = coupling_list[0]
+    #     vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num)
+    #     coupling_ham =  vib_coupling * coupling_strength
         
-        for i in range(1,len(coupling_list)):
-            coupling_strength, site_index_pair = coupling_list[i]
-            vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num,manifold_num)
-            coupling_ham +=  vib_coupling * coupling_strength
-        return coupling_ham
+    #     for i in range(1,len(coupling_list)):
+    #         coupling_strength, site_index_pair = coupling_list[i]
+    #         vib_coupling = self.single_linear_site_vibration_coupling(site_index_pair,mode_num,manifold_num)
+    #         coupling_ham +=  vib_coupling * coupling_strength
+    #     return coupling_ham
     
     def single_linear_site_vibration_coupling(self,site_index_pair,mode_num,manifold_num):
         electronic_matrix = self.site_basis(0,manifold_num)
@@ -916,16 +1373,20 @@ class PolymerVibrations():
     def make_condon_mu(self):
         H_shape = self.total_hamiltonian.shape
         mu_shape = (*H_shape,3)
-        self.mu = np.zeros(mu_shape)
+        # self.mu = np.zeros(mu_shape)
         self.mu_ket_up = np.zeros(mu_shape)
         for i in range(3):
             pol = self.Polymer.pols[i]
-            elec_mu = self.Polymer.mu_dict[pol]
-            mu = self.Polymer.extract_electronic_subspace(elec_mu,0,self.maximum_manifold)
-            self.mu[:,:,i] = np.kron(mu,self.vibrational_identity)
+            # elec_mu = self.Polymer.mu_dict[pol]
+            # mu = self.Polymer.extract_electronic_subspace(elec_mu,0,self.maximum_manifold)
+            # self.mu[:,:,i] = np.kron(mu,self.vibrational_identity)
 
             elec_mu_up = self.Polymer.mu_up_dict[pol]
             mu_up = self.Polymer.extract_electronic_subspace(elec_mu_up,0,self.maximum_manifold)
+            if not self.RWA:
+                if self.separable_manifolds:
+                    raise Exception('manifolds cannot be separated when moving beyond the RWA')
+                mu_up += mu_up.T
             
             self.mu_ket_up[:,:,i] = np.kron(mu_up,self.vibrational_identity)
 
@@ -933,15 +1394,14 @@ class PolymerVibrations():
         mu_dict = {}
         for i in range(self.maximum_manifold):
             j = i+1
-            mu = self.extract_vibronic_coherence(self.mu[:,:,0],j,i)
+            mu = self.extract_vibronic_coherence(self.mu_ket_up[:,:,0],j,i)
             mu_shape = (*mu.shape,3)
             mu3d = np.zeros(mu_shape)
             mu3d[:,:,0] = mu[:,:]
-            mu3d[:,:,1] = self.extract_vibronic_coherence(self.mu[:,:,1],j,i)
-            mu3d[:,:,2] = self.extract_vibronic_coherence(self.mu[:,:,2],j,i)
+            mu3d[:,:,1] = self.extract_vibronic_coherence(self.mu_ket_up[:,:,1],j,i)
+            mu3d[:,:,2] = self.extract_vibronic_coherence(self.mu_ket_up[:,:,2],j,i)
             key = str(i) + '_to_' + str(j)
             mu_dict[key] = mu3d
-
         np.savez(os.path.join(self.save_path,'mu_original_H_basis.npz'),**mu_dict)
 
     def save_mu_all_manifolds(self):

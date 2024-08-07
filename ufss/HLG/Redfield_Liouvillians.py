@@ -1,11 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-from scipy.sparse import csr_matrix, identity, kron
-from scipy.sparse.linalg import eigs, eigsh
+from scipy.sparse import csr_matrix, csc_matrix, identity, kron, save_npz, load_npz
+from scipy.sparse.linalg import eigs, eigsh, spsolve
 import itertools
 from scipy.linalg import block_diag, eig, expm, eigh
-from scipy.sparse import save_npz, load_npz, csr_matrix, csc_matrix
 import scipy.sparse as sp
 from scipy.special import binom
 import yaml
@@ -22,35 +21,51 @@ class OhmicSpectralDensity:
     """Creates an ohmic spectral density function
 """
 
-    def __init__(self,lam,gam,kT,*,cutoff='lorentz-drude'):
+    def __init__(self,lam,gam,kT,*,cutoff='lorentz-drude',S = 0, Omega = 0, Gamma = 0, nu = 0):
         """
         Args:
             lam (float): bath coupling strength
             gam (float): bath decay rate or cutoff frequency
             kT (float): temperature
-            cutoff (str): high-frequency cutoff function (options: 'lorentz-drude or 
-                exponential)
+            cutoff (str): high-frequency cutoff function (options: 'lorentz-drude'
+                'exponential' or 'brownian')
+                N.B.: 'brownian' includes the SD and a cutoff
+            S (float) : Huang-Rhys factor
+            Omega (float) : oscillator frequency of the bath
+            Gamma (float) : oscillator damping of the bath
+            nu (float) : scaling factor of the bath
 """
         self.lam = lam
         self.gam = gam
+        self.prefactor = 2 * self.lam/self.gam
         self.kT = kT
+        self.S = S
+        self.Omega = Omega
+        self.Gamma = Gamma
+        self.nu = nu
+
 
         if cutoff == 'lorentz-drude':
             self.J = self.lorentz_drude
         elif cutoff == 'exponential':
             self.J = self.exponential
+        elif cutoff == 'brownian':
+            self.J = self.brownian
 
-    def ohmic(self,w):
-        return 2 * w * self.lam/self.gam
 
     def lorentz_drude(self,w):
-        return self.ohmic(w) * self.gam**2 / (w**2 + self.gam**2)
+        return self.prefactor * self.gam**2 / (w**2 + self.gam**2)
     
     def exponential(self,w):
-        return self.ohmic(w) * np.exp( -np.abs(w) / self.gam)
+        return self.prefactor * np.exp( -np.abs(w) / self.gam)
+
+    def brownian(self, w):
+        return 2 * self.nu * self.prefactor*(self.gam**2/(w**2 + self.gam**2) + self.gam/self.lam * (self.S * self.Omega**3 * self.Gamma)/((self.Omega**2 - w**2)**2 + w**2 * self.Gamma**2))
 
     def temp_dist(self,w):
-        return (1+self.coth(w))/2
+        """Includes the ohmic term w
+"""
+        return w * (1+self.coth(w))/2
 
     def coth(self,w):
         if self.kT == 0:
@@ -65,7 +80,7 @@ class OhmicSpectralDensity:
             zi = zero_ind[0]
             f[:zi] *= self.temp_dist(w[:zi])
             f[zi+1:] *= self.temp_dist(w[zi+1:])
-            f[zi] = 2*self.kT*self.lam/self.gam
+            f[zi] *= self.kT
         elif zero_ind.size == 0:
             f = f * self.temp_dist(w)
         else:
@@ -73,10 +88,11 @@ class OhmicSpectralDensity:
         return f
 
     def C_scal(self,w):
+        f = self.J(w)
         if w == 0:
-            f = 2*self.kT*self.lam/self.gam
+            f *= self.kT
         else:
-            f = self.J(w) * self.temp_dist(w)
+            f *= self.temp_dist(w)
         return f
 
     def __call__(self,w):
@@ -86,7 +102,7 @@ class OhmicSpectralDensity:
             return self.C_scal(w)
 
 class WhiteNoiseSpectralDensity:
-    """Creates a white noie (flat) spectral density function
+    """Creates a white noise (flat) spectral density function
 """
 
     def __init__(self,dephasing_rate,relaxation_rate,kT):
@@ -150,17 +166,34 @@ class RedfieldConstructor:
             separable_manifolds = False
         else:
             separable_manifolds = True
+
+        self.num_vibrations = len(self.params['vibrations'])
             
         self.PolyVib = PolymerVibrations(os.path.join(folder,'params.yaml'),
                                          separable_manifolds=separable_manifolds)
 
+        self.N = self.PolyVib.Polymer.N
+
+        # Verify whether we have more than one baths option for singly-excited sites
+        if isinstance(self.params['bath']['site_bath'], list):
+            self.multiple_site_bath = True
+            if 'site_bath_option' in self.params['bath']:
+                pass
+            else:
+                raise Exception(
+                    'User must include site_bath_option list in order to treat different baths for each site')
+        else:
+            self.multiple_site_bath = False
+
         self.set_spectral_densities()
+
 
         try:
             self.secular = self.params['bath']['secular']
         except KeyError:
             self.secular = False
-            
+
+
         if do_nothing:
             pass
         else: 
@@ -175,16 +208,79 @@ class RedfieldConstructor:
                 self.save_mu()
 
     def set_spectral_densities(self):
-        self.SD = {}
-        self.SD['site_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
-        self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
-        try:
-            self.SD['site_internal_conversion_bath'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath'])
-            if self.PolyVib.separable_manifolds == True:
-                raise Exception('Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
 
-        except KeyError:
-            pass
+        if self.multiple_site_bath:
+            self.SD = {}
+            self.SD['site_bath'] = []
+
+            for n in range(self.PolyVib.Polymer.num_sites):
+                bath_option = self.params['bath']['site_bath_option'][n]
+                spec_density = self.make_spectral_density(self.params['bath']['site_bath'][bath_option])
+
+                self.SD['site_bath'].append(spec_density)
+
+            if 'site_bath2' in self.params['bath']:
+                self.SD['site_bath2'] = []
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    bath2_option = self.params['bath']['site_bath2_option'][n]
+                    spec_density = self.make_spectral_density(self.params['bath']['site_bath2'][bath2_option])
+                    self.SD['site_bath2'].append(spec_density)
+
+
+            if self.num_vibrations > 0 :
+                if 'vibration_bath' in self.params['bath'].keys():
+                    self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['vibration_bath'])
+                else:
+                    self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
+                    warnings.warn('Using site_bath for vibration_bath')
+            try:
+                self.SD['site_internal_conversion_bath'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath'])
+                if self.PolyVib.separable_manifolds == True:
+                    raise Exception('Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath21'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+        else :
+            self.SD = {}
+            self.SD['site_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
+            if self.num_vibrations > 0:
+                if 'vibration_bath' in self.params['bath'].keys():
+                    self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['vibration_bath'])
+                else:
+                    self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
+                    warnings.warn('Using site_bath for vibration_bath')
+            try:
+                self.SD['site_internal_conversion_bath'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath'])
+                if self.PolyVib.separable_manifolds == True:
+                    raise Exception('Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_bath2'] = self.make_spectral_density(self.params['bath']['site_bath2'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath21'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
 
     def make_spectral_density(self,bath_dict):
         kT = bath_dict['temperature']
@@ -194,7 +290,14 @@ class RedfieldConstructor:
             lam = bath_dict['coupling']
             gam = bath_dict['cutoff_frequency']
             cutoff = bath_dict['cutoff_function']
-            SD = OhmicSpectralDensity(lam,gam,kT,cutoff=cutoff)
+            if cutoff == 'brownian':
+                S  = bath_dict['S']
+                Gamma = bath_dict['Gamma']
+                Omega = bath_dict['Omega']
+                nu = bath_dict['nu']
+                SD = OhmicSpectralDensity(lam,gam,kT, cutoff = cutoff, S = S, Omega = Omega, Gamma = Gamma, nu = nu)
+            else :
+                SD = OhmicSpectralDensity(lam,gam,kT,cutoff=cutoff)
         elif spectrum_type == 'white-noise':
             deph_rate = bath_dict['dephasing_rate']
             relax_rate = bath_dict['relaxation_rate']
@@ -257,9 +360,11 @@ class RedfieldConstructor:
         Args:
             manifold_key (str): can be 'all_manifolds' or '0','1','2',...
 """
-        spectral_density = self.SD['vibration_bath']
         size = self.eigenvalues[manifold_key].size
         Y1 = np.zeros((size,size,size,size))
+        if self.num_vibrations == 0:
+            return Y1
+        spectral_density = self.SD['vibration_bath']
         if manifold_key == 'all_manifolds':
             pass
         else:
@@ -284,17 +389,55 @@ class RedfieldConstructor:
         Args:
             manifold_key (str): can be 'all_manifolds' or '0','1','2',...
 """
-        spectral_density = self.SD['site_bath']
-        size = self.eigenvalues[manifold_key].size
-        Y2 = np.zeros((size,size,size,size))
- 
-        for n in range(self.PolyVib.Polymer.num_sites):
-            # site projector operators
-            P_n = self.PolyVib.Polymer.occupied_list[n]
-            P_n = self.extract_electronic_operator(P_n,manifold_key)
 
-            P_n = np.kron(P_n,self.PolyVib.vibrational_identity)
-            Y2 += self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
+        if self.multiple_site_bath:
+            size = self.eigenvalues[manifold_key].size
+            Y2 = np.zeros((size, size, size, size))
+
+            for n in range(self.PolyVib.Polymer.num_sites):
+                spectral_density = self.SD['site_bath'][n]
+                # site projector operators
+                P_n = self.PolyVib.Polymer.occupied_list[n]
+                P_n = self.extract_electronic_operator(P_n, manifold_key)
+
+                P_n = np.kron(P_n, self.PolyVib.vibrational_identity)
+                Y2 += self.make_dissipation_tensor(P_n, manifold_key, spectral_density)
+
+            # create the electronic dissipation tensor for doubly-excited site
+            if self.N == 3:
+                if 'site_bath2' in self.params['bath']:
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        spectral_density = self.SD['site_bath2'][n]
+                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
+                        P_n2 = self.extract_electronic_operator(P_n2, manifold_key)
+
+                        P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
+
+                        Y2 += self.make_dissipation_tensor(P_n2, manifold_key, spectral_density)
+        else :
+            spectral_density = self.SD['site_bath']
+            size = self.eigenvalues[manifold_key].size
+            Y2 = np.zeros((size,size,size,size))
+
+            for n in range(self.PolyVib.Polymer.num_sites):
+                # site projector operators
+                P_n = self.PolyVib.Polymer.occupied_list[n]
+                P_n = self.extract_electronic_operator(P_n,manifold_key)
+
+                P_n = np.kron(P_n,self.PolyVib.vibrational_identity)
+                Y2 += self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
+
+            # create the electronic dissipation tensor for doubly-excited site
+            if self.N == 3:
+                if 'site_bath2' in self.params['bath']:
+                    spectral_density = self.SD['site_bath2']
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
+                        P_n2 = self.extract_electronic_operator(P_n2,manifold_key)
+
+                        P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
+
+                        Y2 += self.make_dissipation_tensor(P_n2,manifold_key,spectral_density)
 
         return Y2
 
@@ -323,6 +466,31 @@ class RedfieldConstructor:
             sigma_x_n = up_n + up_n.T
 
             Y3 += self.make_dissipation_tensor(sigma_x_n,manifold_key,spectral_density)
+
+        if self.N == 3:
+            if 'site_internal_conversion_bath21' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath21']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n21 = self.PolyVib.Polymer.up21_list[n]
+                    up_n21 = self.extract_electronic_operator(up_n21,manifold_key)
+                    up_n21 = np.kron(up_n21,self.PolyVib.vibrational_identity)
+                    sigma_x_n21 = up_n21 + up_n21.T
+
+                    Y3 += self.make_dissipation_tensor(sigma_x_n21,manifold_key,spectral_density)
+
+            if 'site_internal_conversion_bath20' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath20']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n20 = self.PolyVib.Polymer.up20_list[n]
+                    up_n20 = self.extract_electronic_operator(up_n20, manifold_key)
+                    up_n20 = np.kron(up_n20, self.PolyVib.vibrational_identity)
+                    sigma_x_n20 = up_n20 + up_n20.T
+
+                    Y3 += self.make_dissipation_tensor(sigma_x_n20, manifold_key, spectral_density)
                 
         return Y3
 
@@ -415,7 +583,7 @@ class RedfieldConstructor:
         else:
             for ket_man,bra_man in itertools.product(self.manifolds,
                                                      self.manifolds):
-                L_key = ket_man + bra_man
+                L_key = ket_man + ',' + bra_man
                 R = self.make_flat_R(ket_man,bra_man)
                 U = self.make_U(ket_man,bra_man)
                 self.L[L_key] = U - R
@@ -484,8 +652,8 @@ class RedfieldConstructor:
         i2_size = self.eigenvalues[str(i2)].size
         
         bra_eye = np.eye(j_size)
-        old_key = str(i) + str(j)
-        new_key = str(i2) + str(j2)
+        old_key = str(i) + ',' + str(j)
+        new_key = str(i2) + ',' + str(j2)
         
         mu_shape = (i2_size*j_size,i_size*j_size,3)
         new_mu = np.zeros(mu_shape,dtype='complex')
@@ -520,8 +688,8 @@ class RedfieldConstructor:
         j2_size = self.eigenvalues[str(j2)].size
         
         ket_eye = np.eye(i_size)
-        old_key = str(i) + str(j)
-        new_key = str(i2) + str(j2)
+        old_key = str(i) + ',' + str(j)
+        new_key = str(i2) + ',' + str(j2)
         
         mu_shape = (i_size*j2_size,i_size*j_size,3)
         new_mu = np.zeros(mu_shape,dtype='complex')
@@ -623,9 +791,24 @@ class SecularRedfieldConstructor:
             separable_manifolds = False
         else:
             separable_manifolds = True
+
+        self.num_vibrations = len(self.params['vibrations'])
             
         self.PolyVib = PolymerVibrations(os.path.join(folder,'params.yaml'),
                                          separable_manifolds=separable_manifolds)
+
+        self.N = self.PolyVib.Polymer.N
+
+        if isinstance(self.params['bath']['site_bath'], list):
+            self.multiple_site_bath = True
+            if 'site_bath_option' in self.params['bath']:
+                pass
+            else:
+                raise Exception(
+                    'User must include site_bath_option list in order to treat different baths for each site')
+        else:
+            self.multiple_site_bath = False
+
 
         self.set_spectral_densities()
 
@@ -648,16 +831,76 @@ class SecularRedfieldConstructor:
                 self.save_mu()
 
     def set_spectral_densities(self):
-        self.SD = {}
-        self.SD['site_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
-        self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
-        try:
-            self.SD['site_internal_conversion_bath'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath'])
-            if self.PolyVib.separable_manifolds == True:
-                raise Exception('Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
+        if self.multiple_site_bath:
+            self.SD = {}
+            self.SD['site_bath'] = []
 
-        except KeyError:
-            pass
+            for n in range(self.PolyVib.Polymer.num_sites):
+                bath_option = self.params['bath']['site_bath_option'][n]
+                spec_density = self.make_spectral_density(self.params['bath']['site_bath'][bath_option])
+
+                self.SD['site_bath'].append(spec_density)
+
+            if 'site_bath2' in self.params['bath']:
+                self.SD['site_bath2'] = []
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    bath2_option = self.params['bath']['site_bath2_option'][n]
+                    spec_density = self.make_spectral_density(self.params['bath']['site_bath2'][bath2_option])
+                    self.SD['site_bath2'].append(spec_density)
+
+            if self.num_vibrations > 0:
+                self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['vibration_bath'])
+            try:
+                self.SD['site_internal_conversion_bath'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath'])
+                if self.PolyVib.separable_manifolds == True:
+                    raise Exception(
+                        'Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath21'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+        else:
+            self.SD = {}
+            self.SD['site_bath'] = self.make_spectral_density(self.params['bath']['site_bath'])
+            if self.num_vibrations > 0:
+                self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['vibration_bath'])
+            try:
+                self.SD['site_internal_conversion_bath'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath'])
+                if self.PolyVib.separable_manifolds == True:
+                    raise Exception(
+                        'Cannot model site internal conversion processes when input Hamiltonian has been divided into separate manifolds')
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_bath2'] = self.make_spectral_density(self.params['bath']['site_bath2'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath21'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
 
     def make_spectral_density(self,bath_dict):
         kT = bath_dict['temperature']
@@ -667,11 +910,18 @@ class SecularRedfieldConstructor:
             lam = bath_dict['coupling']
             gam = bath_dict['cutoff_frequency']
             cutoff = bath_dict['cutoff_function']
-            SD = OhmicSpectralDensity(lam,gam,kT,cutoff=cutoff)
+            if cutoff == 'brownian':
+                S = bath_dict['S']
+                Gamma = bath_dict['Gamma']
+                Omega = bath_dict['Omega']
+                nu = bath_dict['nu']
+                SD = OhmicSpectralDensity(lam, gam, kT, cutoff=cutoff, S=S, Omega=Omega, Gamma=Gamma, nu = nu)
+            else:
+                SD = OhmicSpectralDensity(lam, gam, kT, cutoff=cutoff)
         elif spectrum_type == 'white-noise':
             deph_rate = bath_dict['dephasing_rate']
             relax_rate = bath_dict['relaxation_rate']
-            SD = WhiteNoiseSpectralDensity(deph_rate,relax_rate,kT)
+            SD = WhiteNoiseSpectralDensity(deph_rate, relax_rate, kT)
         else:
             raise Exception('spectrum_type not supported')
 
@@ -736,11 +986,14 @@ class SecularRedfieldConstructor:
         Args:
             manifold_key (str): can be 'all_manifolds' or '0','1','2',...
 """
-        spectral_density = self.SD['vibration_bath']
         size = self.eigenvalues[manifold_key].size
         Y1_iikk = np.zeros((size,size))
         Y1_ijij = np.zeros((size,size))
         Y1_ijji = np.zeros((size,size))
+        if self.num_vibrations == 0:
+            return Y1_iikk, Y1_ijij, Y1_ijji
+        
+        spectral_density = self.SD['vibration_bath']
         if manifold_key == 'all_manifolds':
             pass
         else:
@@ -768,22 +1021,69 @@ class SecularRedfieldConstructor:
         Args:
             manifold_key (str): can be 'all_manifolds' or '0','1','2',...
 """
-        spectral_density = self.SD['site_bath']
-        size = self.eigenvalues[manifold_key].size
-        Y2_iikk = np.zeros((size,size))
-        Y2_ijij = np.zeros((size,size))
-        Y2_ijji = np.zeros((size,size))
- 
-        for n in range(self.PolyVib.Polymer.num_sites):
-            # site projector operators
-            P_n = self.PolyVib.Polymer.occupied_list[n]
-            P_n = self.extract_electronic_operator(P_n,manifold_key)
+        if self.multiple_site_bath:
+            size = self.eigenvalues[manifold_key].size
+            Y2_iikk = np.zeros((size, size))
+            Y2_ijij = np.zeros((size, size))
+            Y2_ijji = np.zeros((size, size))
 
-            P_n = np.kron(P_n,self.PolyVib.vibrational_identity)
-            a,b,c = self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
-            Y2_iikk += a
-            Y2_ijij += b
-            Y2_ijji += c
+            for n in range(self.PolyVib.Polymer.num_sites):
+                spectral_density = self.SD['site_bath'][n]
+                # site projector operators
+                P_n = self.PolyVib.Polymer.occupied_list[n]
+                P_n = self.extract_electronic_operator(P_n, manifold_key)
+
+                P_n = np.kron(P_n, self.PolyVib.vibrational_identity)
+                a, b, c = self.make_dissipation_tensor(P_n, manifold_key, spectral_density)
+                Y2_iikk += a
+                Y2_ijij += b
+                Y2_ijji += c
+
+            if self.N == 3:
+                if 'site_bath2' in self.params['bath']:
+
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        spectral_density = self.SD['site_bath2'][n]
+                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
+                        P_n2 = self.extract_electronic_operator(P_n2, manifold_key)
+
+                        P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
+                        a2, b2, c2 = self.make_dissipation_tensor(P_n2, manifold_key, spectral_density)
+                        Y2_iikk += a2
+                        Y2_ijij += b2
+                        Y2_ijji += c2
+        else :
+            spectral_density = self.SD['site_bath']
+            size = self.eigenvalues[manifold_key].size
+            Y2_iikk = np.zeros((size,size))
+            Y2_ijij = np.zeros((size,size))
+            Y2_ijji = np.zeros((size,size))
+
+            for n in range(self.PolyVib.Polymer.num_sites):
+                # site projector operators
+                P_n = self.PolyVib.Polymer.occupied_list[n]
+                P_n = self.extract_electronic_operator(P_n,manifold_key)
+
+                P_n = np.kron(P_n,self.PolyVib.vibrational_identity)
+                a,b,c = self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
+                Y2_iikk += a
+                Y2_ijij += b
+                Y2_ijji += c
+
+            if self.N == 3:
+                if 'site_bath2' in self.params['bath']:
+                    spectral_density = self.SD['site_bath2']
+
+                    for n in range(self.PolyVib.Polymer.num_sites):
+
+                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
+                        P_n2 = self.extract_electronic_operator(P_n2,manifold_key)
+
+                        P_n2 = np.kron(P_n2,self.PolyVib.vibrational_identity)
+                        a2 , b2 , c2 = self.make_dissipation_tensor(P_n2,manifold_key,spectral_density)
+                        Y2_iikk += a2
+                        Y2_ijij += b2
+                        Y2_ijji += c2
 
         return Y2_iikk, Y2_ijij, Y2_ijji
 
@@ -819,6 +1119,40 @@ class SecularRedfieldConstructor:
             Y3_iikk += a
             Y3_ijij += b
             Y3_ijji += c
+
+        if self.N == 3:
+            if 'site_internal_conversion_bath21' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath21']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+
+                    up_n21 = self.PolyVib.Polymer.up21_list[n]
+                    up_n21 = self.extract_electronic_operator(up_n21,manifold_key)
+                    up_n21 = np.kron(up_n21,self.PolyVib.vibrational_identity)
+                    sigma_x_n21 = up_n21 + up_n21.T
+
+                    a21, b21, c21 = self.make_dissipation_tensor(sigma_x_n21,manifold_key,spectral_density)
+                    Y3_iikk += a21
+                    Y3_ijij += b21
+                    Y3_ijji += c21
+
+            if 'site_internal_conversion_bath20' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath20']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+
+                    up_n20 = self.PolyVib.Polymer.up20_list[n]
+                    up_n20 = self.extract_electronic_operator(up_n20, manifold_key)
+                    up_n20 = np.kron(up_n20, self.PolyVib.vibrational_identity)
+                    sigma_x_n20 = up_n20 + up_n20.T
+
+                    a20, b20, c20 = self.make_dissipation_tensor(sigma_x_n20,manifold_key,spectral_density)
+                    Y3_iikk += a20
+                    Y3_ijij += b20
+                    Y3_ijji += c20
+
                 
         return Y3_iikk, Y3_ijij, Y3_ijji
 
@@ -874,7 +1208,7 @@ class SecularRedfieldConstructor:
         else:
             for ket_man,bra_man in itertools.product(self.manifolds,
                                                      self.manifolds):
-                L_key = ket_man + bra_man
+                L_key = ket_man + ',' + bra_man
                 R = self.make_flat_R(ket_man,bra_man)
                 U = self.make_U(ket_man,bra_man)
                 self.L[L_key] = U - R
@@ -950,8 +1284,8 @@ class SecularRedfieldConstructor:
         i2_size = self.eigenvalues[str(i2)].size
         
         bra_eye = np.eye(j_size)
-        old_key = str(i) + str(j)
-        new_key = str(i2) + str(j2)
+        old_key = str(i) + ',' + str(j)
+        new_key = str(i2) + ',' + str(j2)
         
         mu_shape = (i2_size*j_size,i_size*j_size,3)
         new_mu = np.zeros(mu_shape,dtype='complex')
@@ -986,8 +1320,8 @@ class SecularRedfieldConstructor:
         j2_size = self.eigenvalues[str(j2)].size
         
         ket_eye = np.eye(i_size)
-        old_key = str(i) + str(j)
-        new_key = str(i2) + str(j2)
+        old_key = str(i) + ',' + str(j)
+        new_key = str(i2) + ',' + str(j2)
         
         mu_shape = (i_size*j2_size,i_size*j_size,3)
         new_mu = np.zeros(mu_shape,dtype='complex')
@@ -1109,11 +1443,63 @@ class DiagonalizeLiouvillian:
             self.mu_keys = list(mu_arch.keys())
             self.mu = {key:mu_arch[key] for key in self.mu_keys}
 
+    def check_parallel(self,v1,v2):
+        v1n = np.sqrt(np.dot(v1,v1))
+        v2n = np.sqrt(np.dot(v2,v2))
+        cos_theta = np.abs(np.dot(v1,v2)/v1n/v2n)
+        if np.isclose(cos_theta-1,0,atol=np.spacing(1)):
+            par = True
+        else:
+            par = False
+        return par
+
+    def orthonormalize(self,eigenvalues,left,right):
+        """Orthogonalize the left and right eigenvectors with respect to 
+            each other
+"""
+        ev = eigenvalues
+        norms = np.einsum('ij,ji->i',left,right)
+        if np.any(np.abs(norms) < 1E-12):
+            raise Exception("""Overlap between right and left eigenvectors is
+                                too small, L is not diagonalizable""")
+        left = np.dot(np.diag(1/norms),left)
+        lr = np.dot(left,right)
+        lr_diagonal = np.diag(lr.diagonal())
+        diff = lr - lr_diagonal
+        tol = 1E-4
+        if np.max(np.abs(diff)) > tol:
+            num_digits = int(-np.log10(tol))
+            diff = np.round(diff,num_digits)
+            row_inds,col_inds = np.where(np.abs(diff) > tol)
+            for ri,ci in zip(row_inds,col_inds):
+                if np.isclose(ev[ri],ev[ci],atol=tol,rtol=tol):
+                    if self.check_parallel(left[ri,:],left[ci,:]):
+                        raise Exception("""Two left eigenvectors are 
+                                            parallel; L is not
+                                            diagonalizable""")
+                else:
+                    raise Exception("""Left and right eigenvectors are not 
+                                        orthogonal, L is not 
+                                        diagonalizable""")
+            lr_sparse = csc_matrix(np.round(lr,num_digits))
+            coefs = spsolve(lr_sparse,identity(lr.shape[0],format='csc'))
+            left = coefs.dot(left)
+            lr = np.dot(left,right)
+            lr_diagonal = np.diag(lr.diagonal())
+            diff = lr - lr_diagonal
+            if np.max(np.abs(diff)) > tol:
+                raise Exception("""Failed to orthogonalize left and right 
+                                    eigenvectors""")
+
+        return left, right
+
     def eig(self,L,*,check_eigenvectors = True,populations_only = False):
         
         eigvals, eigvecs_left, eigvecs = eig(L,left=True,right=True)
 
         eigvecs_left = np.conjugate(eigvecs_left.T)
+
+        eigvecs_left, eigvecs = self.orthonormalize(eigvals,eigvecs_left,eigvecs)
         
         for i in range(eigvals.size):
             max_index = np.argmax(np.abs(eigvecs[:,i]))
@@ -1138,6 +1524,7 @@ class DiagonalizeLiouvillian:
         if check_eigenvectors:
             LV = L.dot(eigvecs)
             D = eigvecs_left.dot(LV)
+            # print(np.max(np.abs(D-np.diag(eigvals))))
             if np.allclose(D,np.diag(eigvals),rtol=1E-10,atol=1E-10):
                 pass
             else:
@@ -1150,7 +1537,7 @@ class DiagonalizeLiouvillian:
             ket_key = 'all_manifolds'
             bra_key = 'all_manifolds'
         else:
-            ket_key,bra_key = L_key
+            ket_key,bra_key = L_key.split(',')
         L = self.L[L_key]
         if L.dtype == np.dtype('O'):
             L = L[()]
@@ -1229,7 +1616,7 @@ class DiagonalizeLiouvillian:
 
             if self.prune:
                 boolean_mu = np.zeros(mu.shape[:2],dtype='bool')
-                boolean_mu[:,:] = np.round(np.sum(np.abs(new_mu)**2,axis=-1),12)
+                boolean_mu[:,:] = np.round(np.sqrt(np.sum(np.abs(new_mu)**2,axis=-1)),12)
                 mu = mu * boolean_mu[:,:,np.newaxis]
                 self.boolean_mu[key] = boolean_mu
 

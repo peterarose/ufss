@@ -1,9 +1,6 @@
 import yaml
 import os
-import itertools
 import copy
-import shutil
-import math
 
 def convert_general_dict(vib_dict,*,halfway_basis=True):
     new_vib_dict = copy.deepcopy(vib_dict)
@@ -71,6 +68,10 @@ def convert(base_path,*,halfway_basis=True):
         simple = yaml.load(yamlstream,Loader=yaml.SafeLoader)
     
     params = dict()
+    try:
+        params['RWA'] = simple['RWA']
+    except KeyError:
+        params['RWA'] = True
     params['dipoles'] = simple['dipoles']
     params['site_energies'] = simple['site_energies']
     params['site_couplings'] = simple['site_couplings']

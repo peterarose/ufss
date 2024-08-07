@@ -1,11 +1,6 @@
 import numpy as np
-from scipy.sparse import csr_matrix, identity, kron
-from scipy.sparse.linalg import eigs, eigsh
-import itertools
-from scipy.linalg import block_diag, eig, expm, eigh
-from scipy.sparse import save_npz, load_npz, csr_matrix, csc_matrix
-import yaml
-import copy
+from scipy.sparse import csr_matrix
+from scipy.sparse import save_npz, csr_matrix
 import warnings
 import os
 
@@ -16,9 +11,11 @@ class ManualL:
         self.output = output
         if savedir=='':
             savedir = os.getcwd()
-        self.base_path = os.path.join(savedir,output)
+        self.base_path = os.path.join(savedir,'open')
+        print(self.base_path)
         os.makedirs(self.base_path,exist_ok=True)
         if output == 'uf2':
+            self.save_L(self.base_path)
             self.eigfun(self.L)
             self.save_eigensystem(self.base_path)
             if len(mu_ket_up.shape) == 2:
@@ -26,10 +23,12 @@ class ManualL:
             elif len(mu_ket_up.shape) == 3:
                 self.save_RWA_mu3D(self.base_path)
         elif output == 'RKE':
+            print(self.base_path)
             self.save_L(self.base_path)
             self.save_RWA_mu_site_basis(self.base_path)
 
     def save_L(self,dirname):
+        print(os.path.join(dirname,'L.npz'))
         save_npz(os.path.join(dirname,'L.npz'),csr_matrix(self.L))
             
 

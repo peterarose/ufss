@@ -409,7 +409,7 @@ for sites a, b, ...
             self.manifolds_separable = False
         else:
             self.manifolds_separable = True
-        
+                
         self.set_electronic_dissipation_instructions()
         
         self.occupation_num_mask = mask_by_occupation_num
@@ -465,6 +465,7 @@ for sites a, b, ...
                 
             else:
                 self.set_eigensystem()
+                print('Warning, manifolds must be separable')
                 # self.set_mu()
                 # self.save_mu(pruned=True)
                 # self.save_eigensystem()

@@ -19,7 +19,8 @@ class run:
 
         if 'bath' in pv.params.keys():
             self.open = True
-            if 'site_bath' in pv.params['bath'].keys():
+            if ('site_bath' in pv.params['bath'].keys() or 
+                'vibration_bath' in pv.params['bath'].keys()):
                 self.Redfield = True
                 try:
                     self.secular = pv.params['bath']['secular']
