@@ -1,0 +1,20 @@
+dipoles:
+- - 1
+  - 0
+  - 0
+- - 0
+  - 1
+  - 0
+site_couplings:
+  - 0.3307
+site_energies:
+  - 0
+  - 0.75
+truncation_size: 3
+vibrations:
+- displacement: 0.2
+  omega_g: 1
+  site_label: 0
+- displacement: 0.2
+  omega_g: 1.0000001
+  site_label: 1
