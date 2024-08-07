@@ -720,7 +720,7 @@ class SpectroscopyBase:
     def set_phase_discrimination(self,pdc):
         self.pdc = pdc
 
-    def set_efields(self,efield_times,centers,efields):
+    def set_efields(self,efield_times,efields,centers):
         self.engine.set_efields(efield_times,efields,centers,self.pdc)
         self.engine.set_polarization_sequence(['x']*len(self.pdc))
 
