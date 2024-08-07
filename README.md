@@ -1,6 +1,8 @@
 # Ultrafast Spectroscopy Suite (UFSS)
 Code for simulating nonlinear optical spectroscopies of closed and open systems
 
+Updated on August 6, 2024 to version 0.2.0. Significant structural chagnes to the code base. Added composite diagrams. Unified UF2 and RKE code where possible, unified UF2 and RKE user interface where possible. Added helper classes for simulating common spectra. Higher-order signals are now easier for the user to calculate. Old code structure available in version 0.1.3.
+
 ## Installation instructions
 pip install ufss  
 
