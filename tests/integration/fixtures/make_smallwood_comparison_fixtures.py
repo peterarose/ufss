@@ -103,7 +103,7 @@ manL = ufss.HLG.ManualL(L0,mu_ket_up,savedir=folder,output='uf2')
 
 ##### Get the same w-values that will be used by uf2
 
-re = ufss.DensityMatrices(os.path.join(folder,'uf2'),
+re = ufss.DensityMatrices(os.path.join(folder,'open'),
                           detection_type='complex_polarization')
 
 M = 25 # number of points used to resolve optical pulses

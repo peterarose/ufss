@@ -13,7 +13,7 @@ def g(t,sigma):
 def calculate_spectrum_with_UF2():
     folder = os.path.join('fixtures','v_3LS')
 
-    re = ufss.DensityMatrices(os.path.join(folder,'uf2'),
+    re = ufss.DensityMatrices(os.path.join(folder,'open'),
                               detection_type='complex_polarization')
 
     # defining the optical pulses in the RWA
