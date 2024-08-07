@@ -1,7 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import numpy.polynomial.chebyshev as npch
-from pyfftw.interfaces.numpy_fft import fftshift, ifft, ifftshift, fftfreq
+try:
+    from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+except ImportError:
+    from numpy.fft import fft, fftshift, ifft, ifftshift, fftfreq
 import copy
 import warnings
 import os

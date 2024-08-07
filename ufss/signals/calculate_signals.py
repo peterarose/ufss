@@ -10,8 +10,10 @@ import functools
 import numpy as np
 import numpy.polynomial.chebyshev as npch
 import matplotlib.pyplot as plt
-import pyfftw
-from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+try:
+    from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+except ImportError:
+    from numpy.fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.interpolate import interp1d as sinterp1d
 import scipy
 from scipy.sparse import csr_matrix, issparse

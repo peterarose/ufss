@@ -8,9 +8,11 @@ import time
 #Dependencies - numpy, scipy, matplotlib, pyfftw
 import numpy as np
 import matplotlib.pyplot as plt
-import pyfftw
 from scipy.sparse import csr_matrix, identity, kron
-from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+try:
+    from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+except ImportError:
+    from numpy.fft import fft, fftshift, ifft, ifftshift, fftfreq
 from scipy.integrate import RK45
 
 #Other parts of this code

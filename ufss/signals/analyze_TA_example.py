@@ -7,7 +7,6 @@ import time
 import numpy as np
 import warnings
 import matplotlib.pyplot as plt
-from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
 
 #UF2
 from .plotting_tools import Plotter

@@ -4,7 +4,7 @@ import warnings
 import copy
 import time
 
-#Dependencies - numpy, scipy, matplotlib, pyfftw
+#Dependencies - numpy, scipy, matplotlib
 import numpy as np
 import numpy.polynomial.chebyshev as npch
 
