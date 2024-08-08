@@ -1,4 +1,8 @@
-from .heaviside_convolve import HeavisideConvolve
+try:
+    import pyfftw
+    from .heaviside_convolve_pyfftw import HeavisideConvolve
+except ImportError:
+    from .heaviside_convolve_numpy import HeavisideConvolve
 from .general_base_class import UF2BaseClass, DPBaseClass
 from .open_base_class import OpenBaseClass
 from .closed_base_class import ClosedBaseClass

@@ -16,7 +16,7 @@ with open(path.join(here, 'README.md'), encoding='utf-8') as f:
 setup(
     name='ufss',
 
-    version='0.2.1',
+    version='0.2.2',
 
     description='Package for simulating nonlinear optical spectra',
 
@@ -48,6 +48,6 @@ setup(
 
     python_requires='>=3.5',
 
-    install_requires=['numpy','matplotlib','pyfftw','scipy>=1','pyyaml','pyx'],
+    install_requires=['numpy','matplotlib','scipy>=1','pyx','pyyaml'],
 
 )

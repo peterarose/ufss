@@ -88,6 +88,11 @@ def L2_norm(a,b):
     
 
 class test_shift(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        folder = os.path.join('fixtures','copolymer_P1')
+        ufss.HLG.run(folder,conserve_memory=False)
+
     def test_1(self):
         sig1 = calculate_spectrum_with_UF2(True)
         sig2 = calculate_spectrum_with_UF2(False)

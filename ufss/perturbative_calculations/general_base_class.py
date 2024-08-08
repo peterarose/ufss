@@ -3,13 +3,13 @@ import matplotlib.pyplot as plt
 import numpy.polynomial.chebyshev as npch
 try:
     from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
+    from ufss.perturbative_calculations.heaviside_convolve_pyfftw import HeavisideConvolve, HeavisideConvolveSP
 except ImportError:
     from numpy.fft import fft, fftshift, ifft, ifftshift, fftfreq
+    from ufss.perturbative_calculations.heaviside_convolve_numpy import HeavisideConvolve, HeavisideConvolveSP
 import copy
 import warnings
 import os
-
-from ufss.perturbative_calculations.heaviside_convolve import HeavisideConvolve, HeavisideConvolveSP
 
 class BaseClass:
     """Contains methods that are used by all perturbative calculation engines
