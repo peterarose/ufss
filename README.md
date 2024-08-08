@@ -40,7 +40,9 @@ See README file in the examples subdirectory for more information. Most of the e
 
 ## Dependencies  
 This code depends upon the following packages:  
-numpy, matplotlib, pyfftw, scipy>=1, pyyaml, pyx
+numpy, matplotlib, scipy>=1, pyyaml, pyx
+
+Note: as of version 0.2.2, pyfftw is an optional package. If you would like to use it, you must install fftw first, and then use pip to install pyfftw.
 
 ## References
 If you use UFSS, we request that you cite the following articles, which describe how its components work.
