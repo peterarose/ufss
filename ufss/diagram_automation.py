@@ -559,7 +559,7 @@ class DiagramGenerator(DiagramDrawer):
         Returns:
             tuple : pdc as a tuple of tuples
         """
-        return tuple(tuple(pdc_arr[i,:]) for i in range(pdc_arr.shape[0]))
+        return tuple(tuple(pdc_arr[i,:].tolist()) for i in range(pdc_arr.shape[0]))
 
     def pdc_tup_to_arr(self,pdc_tup):
         """Converts a pdc represented as a tuple of tuples to a numpy array
