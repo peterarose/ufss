@@ -5,50 +5,89 @@ import copy
 def convert_general_dict(vib_dict,*,halfway_basis=True):
     new_vib_dict = copy.deepcopy(vib_dict)
     d = vib_dict['displacement']
+    if type(d) is list:
+        flag_3LS = True
+        d2 = d[1]
+        d = d[0]
+    else:
+        flag_3LS = False
     
     if 'alpha' in vib_dict.keys() and 'potential' in vib_dict.keys():
         raise Exception('Cannot specify potential and alpha simultaneously')
     try:
-        p0,p1 = vib_dict['potential']
+        if flag_3LS:
+            p0,p1,p2 = vib_dict['potential']
+            alpha2 = (p2[0]/p0[0])**(1/2)
+        else:
+            p0,p1 = vib_dict['potential']
+        
         alpha = (p1[0]/p0[0])**(1/2)
     except KeyError:
         try:
-            alpha = vib_dict['alpha']
+            if flag_3LS:
+                alpha, alpha2 = vib_dict['alpha']
+            else:
+                alpha = vib_dict['alpha']
             new_vib_dict.pop('alpha')
         except KeyError:
             alpha = 1
+            alpha2 = 1
         p0 = [1]
         p1 = [alpha**2]
+        p2 = [alpha2**2]
         
     try:
-        k0,k1 = vib_dict['kinetic']
+        if flag_3LS:
+            k0,k1, k2 = vib_dict['kinetic']
+        else:
+            k0,k1 = vib_dict['kinetic']
     except KeyError:
         k0 = [1]
         k1 = [1]
+        if flag_3LS:
+            k2 = [1]
     
     new_d = d*alpha**(1/4)/2
+    if flag_3LS:
+        new_d2 = (d2-d/2)*alpha**(1/4)
     
     try:
-        l = vib_dict['reorganization']
+        if flag_3LS:
+            l, l2 = vib_dict['reorganization']
+        else:
+            l = vib_dict['reorganization']
     except KeyError:
-        l = -alpha**2 * d**2
+        if flag_3LS:
+            l = -alpha**2 * d**2
+            l2 = -alpha2**2 * d2**2
+        else:
+            l = -alpha**2 * d**2
 
     if halfway_basis:
         k0_modifier = [alpha**(i/4) for i in range(2,len(k0)+2)]
         k1_modifier = [alpha**(i/4) for i in range(2,len(k1)+2)]
         p0_modifier = [alpha**(-i/4) for i in range(2,len(p0)+2)]
         p1_modifier = [alpha**(-i/4) for i in range(2,len(p1)+2)]
+        if flag_3LS:
+            k2_modifier = [alpha**(i/4) for i in range(2,len(k2)+2)]
+            p2_modifier = [alpha**(-i/4) for i in range(2,len(p2)+2)]
     else:
         k0_modifier = [1 for i in range(2,len(k0)+2)]
         k1_modifier = [1 for i in range(2,len(k1)+2)]
         p0_modifier = [1 for i in range(2,len(p0)+2)]
         p1_modifier = [1 for i in range(2,len(p1)+2)]
+        if flag_3LS:
+            k2_modifier = [1 for i in range(2,len(k2)+2)]
+            p2_modifier = [1 for i in range(2,len(p2)+2)]
         
     new_k0 = [a*b for a,b in zip(k0,k0_modifier)]
     new_k1 = [a*b for a,b in zip(k1,k1_modifier)]
     
     new_p0 = [a*b for a,b in zip(p0,p0_modifier)]
     new_p1 = [a*b for a,b in zip(p1,p1_modifier)]
+    if flag_3LS:
+        new_k2 =  [a*b for a,b in zip(k2,k2_modifier)]
+        new_p2 =  [a*b for a,b in zip(p2,p2_modifier)]
 
     new_vib_dict['reorganization'] = [0,l]
     new_vib_dict['kinetic'] = [new_k0,new_k1]
@@ -58,6 +97,15 @@ def convert_general_dict(vib_dict,*,halfway_basis=True):
         new_vib_dict['displacement'] = [-new_d,new_d]
     else:
         new_vib_dict['displacement'] = [0,d]
+
+    if flag_3LS:
+        new_vib_dict['reorganization'].append(l2)
+        new_vib_dict['kinetic'].append(new_k2)
+        new_vib_dict['potential'].append(new_p2)
+        if halfway_basis:
+            new_vib_dict['displacement'].append(new_d2)
+        else:
+            new_vib_dict['displacement'].append(d2)
         
     return new_vib_dict
 

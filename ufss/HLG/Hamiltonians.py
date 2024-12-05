@@ -1172,10 +1172,14 @@ class PolymerVibrations():
     def add_vibrations(self):
         v0 = self.empty_vibrations
         v1 = self.occupied_vibrations
+        if self.Polymer.N == 3:
+            v2 = self.doubly_occupied_vibrations
         self.vibrational_hamiltonian = np.zeros(self.total_hamiltonian.shape)
         for i in range(len(v0)):
             self.vibrational_hamiltonian += v0[i]
             self.vibrational_hamiltonian += v1[i]
+            if self.Polymer.N == 3:
+                self.vibrational_hamiltonian += v2[i]
 
         self.total_hamiltonian = self.total_hamiltonian + self.vibrational_hamiltonian
 
@@ -1200,6 +1204,8 @@ class PolymerVibrations():
         self.num_vibrations = len(emp_vibs)
         occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,1)
                     for mode_dict in vibration_params]
+        doub_occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,2)
+                    for mode_dict in vibration_params]
 
         if self.occupation_num_mask:
             self.set_vibrational_total_occupation_number()
@@ -1211,9 +1217,12 @@ class PolymerVibrations():
             self.vibrational_identity = np.eye(N**nv)
         empty_vibrations = self.kron_up_vibrations(emp_vibs)
         occupied_vibrations = self.kron_up_vibrations(occ_vibs)
+        doubly_occupied_vibrations = self.kron_up_vibrations(doub_occ_vibs)
 
         self.empty_vibrations = []
         self.occupied_vibrations = []
+        if self.Polymer.N == 3:
+            self.doubly_occupied_vibrations = []
         
         for i in range(self.num_vibrations):
             site_index = vibration_params[i]['site_label']
@@ -1221,9 +1230,14 @@ class PolymerVibrations():
             empty = self.Polymer.extract_electronic_subspace(empty,0,self.maximum_manifold)
             occupied = self.Polymer.occupied_list[site_index]
             occupied = self.Polymer.extract_electronic_subspace(occupied,0,self.maximum_manifold)
+            if self.Polymer.N == 3:
+                doubly_occupied = self.Polymer.doubly_occupied_list[site_index]
+                doubly_occupied = self.Polymer.extract_electronic_subspace(doubly_occupied,0,self.maximum_manifold)
             
             self.empty_vibrations.append(np.kron(empty,empty_vibrations[i]))
             self.occupied_vibrations.append(np.kron(occupied,occupied_vibrations[i]))
+            if self.Polymer.N == 3:
+                self.doubly_occupied_vibrations.append(np.kron(doubly_occupied,doubly_occupied_vibrations[i]))
 
     def kron_up_vibrations(self,vibrations_list):
         n = self.num_vibrations

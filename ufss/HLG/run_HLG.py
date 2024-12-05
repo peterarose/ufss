@@ -3,12 +3,13 @@ from ufss.HLG import PolymerVibrations,DiagonalizeHamiltonian,RedfieldConstructo
 
 class run:
 
-    def __init__(self,folder,*,for_RKE = False,conserve_memory = False):
+    def __init__(self,folder,*,for_RKE = False,conserve_memory = False,
+                 halfway_basis = True):
         self.for_RKE = for_RKE
         self.conserve_memory = conserve_memory
         self.folder = folder
         try:
-            convert(folder)
+            convert(folder,halfway_basis=halfway_basis)
         except FileNotFoundError:
             pass
 
