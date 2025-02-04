@@ -1204,8 +1204,9 @@ class PolymerVibrations():
         self.num_vibrations = len(emp_vibs)
         occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,1)
                     for mode_dict in vibration_params]
-        doub_occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,2)
-                    for mode_dict in vibration_params]
+        if self.Polymer.N == 3:
+            doub_occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,2)
+                        for mode_dict in vibration_params]
 
         if self.occupation_num_mask:
             self.set_vibrational_total_occupation_number()
@@ -1217,7 +1218,8 @@ class PolymerVibrations():
             self.vibrational_identity = np.eye(N**nv)
         empty_vibrations = self.kron_up_vibrations(emp_vibs)
         occupied_vibrations = self.kron_up_vibrations(occ_vibs)
-        doubly_occupied_vibrations = self.kron_up_vibrations(doub_occ_vibs)
+        if self.Polymer.N == 3:
+            doubly_occupied_vibrations = self.kron_up_vibrations(doub_occ_vibs)
 
         self.empty_vibrations = []
         self.occupied_vibrations = []
