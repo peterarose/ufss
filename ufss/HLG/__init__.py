@@ -13,3 +13,5 @@ from .manual_H_and_D_input import manualH, manualD
 from .manual_L_input import ManualL
 
 from .run_HLG import run
+
+from .make_simple_systems import make_2LS, make_3LS
