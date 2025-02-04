@@ -2,6 +2,7 @@ import numpy as np
 import ufss
 from ufss.signals import SpectroscopyBase
 import matplotlib.pyplot as plt
+import warnings
 
 class Spectroscopy2D(SpectroscopyBase):
 
@@ -10,23 +11,43 @@ class Spectroscopy2D(SpectroscopyBase):
         self.tau = pulse_delays[0]
         self.T = pulse_delays[1]
 
-    def tau_dft(self,signal,*,add_heaviside=True,zero_pad=True):
+    def tau_dft(self,signal,*,mirror_tau_signal=True,add_heaviside=False,zero_pad=False):
         sig = signal.copy()
-        if add_heaviside:
-            sig[0,...] *= 0.5
         tau = self.tau
-        t = self.engine.t
-        if zero_pad:
-            sig_shape = list(sig.shape)
+        sig_shape = list(sig.shape)
+
+        if mirror_tau_signal:
+            if zero_pad:
+                warnings.warn('Skipping zero_pad, not compatibile with option mirror_tau_signal')
+            if add_heaviside:
+                warnings.warn('Skipping add_heaviside, not compatibile with option mirror_tau_signal')
+
             new_tau_size = tau.size*2-1
             sig_shape[0] = new_tau_size
             new_sig = np.zeros(sig_shape,dtype='complex')
             new_sig[new_tau_size//2:,...] = sig
+            sig_flipped = sig[::-1,...]
+            new_sig[:new_tau_size//2,...] = sig_flipped[:-1,...]
             new_tau = np.zeros(tau.size*2-1,dtype=tau.dtype)
             new_tau[new_tau_size//2:] = tau
             new_tau[:new_tau_size//2+1] = -tau[::-1]
             tau = new_tau
             sig = new_sig
+
+        else:
+            if add_heaviside:
+                sig[0,...] *= 0.5
+            if zero_pad:
+                new_tau_size = tau.size*2-1
+                sig_shape[0] = new_tau_size
+                new_sig = np.zeros(sig_shape,dtype='complex')
+                new_sig[new_tau_size//2:,...] = sig
+                new_tau = np.zeros(tau.size*2-1,dtype=tau.dtype)
+                new_tau[new_tau_size//2:] = tau
+                new_tau[:new_tau_size//2+1] = -tau[::-1]
+                tau = new_tau
+                sig = new_sig
+        
         if self.rephasing:
             wtau,signal_ft = ufss.signals.SignalProcessing.ft1D(tau,sig,
                                                                 axis=0)
@@ -36,6 +57,33 @@ class Spectroscopy2D(SpectroscopyBase):
                                                                  axis=0)
         self.wtau = wtau
         return wtau, signal_ft
+
+    # def tau_dft(self,signal,*,add_heaviside=True,zero_pad=True):
+    #     sig = signal.copy()
+    #     if add_heaviside:
+    #         sig[0,...] *= 0.5
+    #     tau = self.tau
+    #     t = self.engine.t
+    #     if zero_pad:
+    #         sig_shape = list(sig.shape)
+    #         new_tau_size = tau.size*2-1
+    #         sig_shape[0] = new_tau_size
+    #         new_sig = np.zeros(sig_shape,dtype='complex')
+    #         new_sig[new_tau_size//2:,...] = sig
+    #         new_tau = np.zeros(tau.size*2-1,dtype=tau.dtype)
+    #         new_tau[new_tau_size//2:] = tau
+    #         new_tau[:new_tau_size//2+1] = -tau[::-1]
+    #         tau = new_tau
+    #         sig = new_sig
+    #     if self.rephasing:
+    #         wtau,signal_ft = ufss.signals.SignalProcessing.ft1D(tau,sig,
+    #                                                             axis=0)
+    #         signal_ft = signal_ft/(2*np.pi)
+    #     else:
+    #         wtau,signal_ft = ufss.signals.SignalProcessing.ift1D(tau,sig,
+    #                                                              axis=0)
+    #     self.wtau = wtau
+    #     return wtau, signal_ft
 
     def get_signal(self,lam,*,tau_dft = True):
         """lam is the perturbative parameter
@@ -115,8 +163,8 @@ class PumpPumpProbe(Spectroscopy2D):
         self.include_linear = include_linear
         self.include_wtau_DC_terms = include_wtau_DC_terms
 
-    def set_identical_gaussians(self,sigma,center,*,M=51,delta=10):
-        t = np.linspace(-sigma,sigma,num=M,endpoint=True)*delta/2
+    def set_identical_gaussians(self,sigma,center,*,M=51,Delta=10):
+        t = np.linspace(-sigma,sigma,num=M,endpoint=True)*Delta/2
         f = ufss.gaussian(t,sigma)
         pump = f * np.exp(-1j*center*t)
         probe = f
