@@ -55,9 +55,9 @@ def make_L():
 
 def setup(uf2_flag=True,conserve_memory=True,open=True):
     if open:
-        calc_folder = os.path.join('/Users/prose/fossil_ufss/Examples/2LS','open')
+        calc_folder = os.path.join(folder,'open')
     else:
-        calc_folder = os.path.join('/Users/prose/fossil_ufss/Examples/2LS','closed')
+        calc_folder = os.path.join(folder,'closed')
     if uf2_flag:
         engine_name = 'UF2'
     else:
