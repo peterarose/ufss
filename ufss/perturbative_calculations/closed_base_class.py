@@ -177,12 +177,13 @@ class ClosedBaseClass(CompositeDiagrams):
         return self.K_dict[int_type](psi_in,pulse_number = pulse_num)
 
     def set_signal_pdcs(self,pdcs):
-        """Specific to closed systems, needed for calculating wavefunctions
+        """Replaces the method of the same name in CompositeDiagrams
+            Specific to closed systems, needed for calculating wavefunctions
         Args:
             pdcs (list) : list of pdcs as np.ndarrays or tuples
 """
         if type(pdcs[0]) is tuple:
-            self.singal_pdcs = pdcs
+            self.signal_pdcs = pdcs
             signal_arrs = [self.pdc_tup_to_arr(pdc) for pdc in pdcs]
         else:
             signal_arrs = pdcs
@@ -190,8 +191,9 @@ class ClosedBaseClass(CompositeDiagrams):
         
         cc_signal_pdcs = [self.pdc_arr_to_tup(arr[:,::-1])
                           for arr in signal_arrs]
+        
         self.all_pdcs = list(set(self.signal_pdcs + cc_signal_pdcs))
-
+        
         sh = signal_arrs[0].shape
         sh = sh + (len(self.all_pdcs),)
         all_pdcs_arr = np.zeros(sh,dtype='int')
@@ -200,6 +202,27 @@ class ClosedBaseClass(CompositeDiagrams):
         self.max_pdc = np.max(all_pdcs_arr,axis=-1)
         self.set_interaction_types()
 
+        return None
+    
+    def remove_signal_pdcs(self,pdc):
+        """Replaces the method of the same name in CompositeDiagrams
+            Remove pdcs satisfying a particular signal detection condition
+        Args:
+            pdc (tuple) : pdc condition to remove
+"""
+        ref_pdc_arr = self.pdc_tup_to_arr(pdc)
+        ref_pdc_cc_arr = ref_pdc_arr[:,::-1]
+        new_signal_pdcs = []
+        for pdc in self.signal_pdcs:
+            pdc_arr = self.pdc_tup_to_arr(pdc)
+            
+            if self.contract_pdc(pdc_arr) == self.contract_pdc(ref_pdc_arr):
+                pass
+            elif self.contract_pdc(pdc_arr) == self.contract_pdc(ref_pdc_cc_arr):
+                pass
+            else:
+                new_signal_pdcs.append(pdc)
+        self.set_signal_pdcs(new_signal_pdcs)
         return None
 
     def remove_calculations_by_pulse_number(self,pulse_number):
