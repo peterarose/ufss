@@ -3,6 +3,7 @@ import ufss
 from ufss.signals import SpectroscopyBase
 import matplotlib.pyplot as plt
 import warnings
+import os
 
 class Spectroscopy2D(SpectroscopyBase):
 
@@ -14,6 +15,13 @@ class Spectroscopy2D(SpectroscopyBase):
     def tau_dft(self,signal,*,mirror_tau_signal=True,add_heaviside=False,zero_pad=False):
         sig = signal.copy()
         tau = self.tau
+        if os.path.split(self.engine.base_path)[-1] == 'closed':
+            if len(sig.shape) == 3:
+                print('Adding phenomenological decay along tau-axis for DFT')
+                sig = sig * np.exp(- self.engine.gamma * tau)[:,np.newaxis,np.newaxis]
+            else:
+                warnings.warn('Did not include gamma along tau-axis, signal is not the expected shape')
+        
         sig_shape = list(sig.shape)
 
         if mirror_tau_signal:
