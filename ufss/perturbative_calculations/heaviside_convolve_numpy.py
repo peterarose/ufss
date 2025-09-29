@@ -159,7 +159,7 @@ class HeavisideConvolveSP:
         a[:,:size1] = arr2
 
         a_theta = np.zeros((size0,2*self.size - 1), dtype='complex128')
-        a_theta[:,-arr1.size] = arr1
+        a_theta[:,-size1:] = arr1
         a_theta = self.theta[np.newaxis,:] * a_theta
         
         b = fft(a,axis=-1) * fft(a_theta,axis=-1)
