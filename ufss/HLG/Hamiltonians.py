@@ -1557,6 +1557,23 @@ class DiagonalizeHamiltonian:
         mu_save_name = os.path.join(self.save_path,'mu.npz')
         np.savez(mu_save_name,**self.mu_eigen_basis)
         return None
+    
+    def trim_manifolds(self,inds_dict):
+        for man_ind in self.manifolds:
+            inds = inds_dict[man_ind]
+            self.eigenvalues[man_ind] = self.eigenvalues[man_ind][inds]
+            self.eigenvectors[man_ind] = self.eigenvectors[man_ind][:,inds]
+        # if self.manifolds[0] == 'all_manifolds':
+        #     self.mu['up'] = self.mu['up'][:,inds,:]
+        #     self.mu['up'] = self.mu['up'][inds,:,:]
+        # else:
+        for key in self.mu_keys:
+            old_key, new_key = self.mu_key_to_manifold_keys(key)
+            mu = self.mu_eigen_basis[key]
+            mu = mu[:,inds_dict[old_key],:]
+            mu = mu[inds_dict[new_key],:,:]
+            self.mu_eigen_basis[key] = mu
+
 
 
 def SHO_basis(n,xvalues):
