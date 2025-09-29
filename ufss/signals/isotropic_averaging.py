@@ -107,17 +107,21 @@ class IsotropicAverage(object):
     """This class performs the isotropic average of the 4th order tensor
         which is the material response produced by 4-wave mixing process"""
 
-    def __init__(self,spectra_calculator,*,diagrams='all'):
+    def __init__(self,spectra_calculator,*,diagrams='all',composite_diagrams = True):
         """Takes as input a ufss object that calculates 4-wave mixing spectra,
         and calculates the isotropically averaged signal, given a lab-frame polarization"""
         self.sc = spectra_calculator
         self.diagrams = diagrams
+        self.composite_diagrams = composite_diagrams
         self.signal_dict = {}
 
     def molecular_frame_signal(self,mol_polarization):
         self.sc.set_polarization_sequence(mol_polarization)
         if self.diagrams == 'all':
-            signal = self.sc.calculate_signal_all_delays(composite_diagrams=False)
+            if self.composite_diagrams:
+                signal = self.sc.calculate_signal_all_delays(composite_diagrams=True)
+            else:
+                signal = self.sc.calculate_signal_all_delays(composite_diagrams=False)
         else:
             signal = self.sc.calculate_diagrams_all_delays(self.diagrams)
         return signal
