@@ -767,7 +767,7 @@ alias transitions onto nonzero electric field amplitudes.
             t_exp_2b = t_exp_2 - t_exp_2[0]
             exp_factor2b_arg = ev2[n_nonzero,np.newaxis] * t_exp_2b[np.newaxis,:]
             exp_factor2b = np.exp(exp_factor2b_arg)
-            print('Possible problem with non-interaction picture calculations')
+            # print('Possible problem with non-interaction picture calculations')
 
         t0 = time.time()
 
