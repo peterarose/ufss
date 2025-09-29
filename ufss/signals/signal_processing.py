@@ -71,7 +71,9 @@ class SignalProcessing(object):
             zero_DC (bool) : if true, sets f(0) = 0
     """
         dx = x[1]-x[0]
+        # print(dx)
         k = fftshift(fftfreq(x.size,d=dx))*2*np.pi
+        # print(k[0],k[-1])
         fft_norm = dx
 
         shifted_x = ifftshift(x)
