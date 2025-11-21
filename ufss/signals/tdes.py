@@ -34,7 +34,7 @@ class Spectroscopy2D(SpectroscopyBase):
             sig_shape[0] = new_tau_size
             new_sig = np.zeros(sig_shape,dtype='complex')
             new_sig[new_tau_size//2:,...] = sig
-            sig_flipped = sig[::-1,...]
+            sig_flipped = np.conjugate(sig[::-1,...])
             new_sig[:new_tau_size//2,...] = sig_flipped[:-1,...]
             new_tau = np.zeros(tau.size*2-1,dtype=tau.dtype)
             new_tau[new_tau_size//2:] = tau
