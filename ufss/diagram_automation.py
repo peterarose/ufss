@@ -1046,6 +1046,17 @@ class DiagramGenerator(DiagramDrawer):
         for ins,pulse_num in diagram:
             rho_manifold += self.instruction_to_manifold_transition[ins]
         return list(rho_manifold)
+    
+    def check_manifold_participation(self,diagram,manifold,pulse_numbers):
+        """Returns True if the diagram involves populations or coherences with 
+            the given manifold number"""
+        rho_manifold = np.array([0,0],dtype='int')
+        for ins,pulse_num in diagram:
+            if pulse_num in pulse_numbers:
+                rho_manifold += self.instruction_to_manifold_transition[ins]
+                if rho_manifold[0] == manifold or rho_manifold[1] == manifold:
+                    return True
+        return False
 
     def get_diagram_excitation_manifold(self,diagram,*,number_of_interactions=2):
         """Returns the excitation number of the density matrix after the 
