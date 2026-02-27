@@ -223,7 +223,7 @@ class ChebPoly:
 
     def integrate(self):
         self.cheb_coefs = npch.chebint(self.cheb_coefs,axis=1,
-                                       lbnd=-1)*self.halfwidth
+                                       lbnd=-1)#self.halfwidth
         self.order = self.cheb_coefs.shape[1]
         self.deg = self.order - 1
 
