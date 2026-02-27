@@ -5,11 +5,14 @@ import time
 
 #Dependencies - numpy, scipy, matplotlib, pyfftw
 import numpy as np
+import numpy.polynomial.chebyshev as npch
 from scipy.sparse import csr_matrix
 
 from ufss.perturbative_calculations import UF2BaseClass
 from ufss.perturbative_calculations import perturbative_container
 from ufss.perturbative_calculations import OpenBaseClass
+
+from ufss.perturbative_calculations import ChebPoly, cheb_perturbative_container
 
 class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
     """This class is designed to calculate perturbative wavepackets in the
@@ -51,6 +54,8 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         self.next_order_time = 0
 
         self.next_order_counter = 0
+
+        self.method = 'UF2'
 
         self.check_for_zero_calculation = False
         self.interaction_picture_shift = True
@@ -135,11 +140,21 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         manifold_key = ra.manifold_key
         
         pdc = ra.pdc
-        
-        tmin = min(ra.t[0],rb.t[0])
-        tmax = max(ra.t[-1],rb.t[-1])
-        dt = min(ra.t[1]-ra.t[0],rb.t[1]-rb.t[0])
-        t = np.arange(tmin,tmax+dt*0.9,dt)
+
+        if self.method == 'UF2':
+            tmin = min(ra.t[0],rb.t[0])
+            tmax = max(ra.t[-1],rb.t[-1])
+            dt = min(ra.t[1]-ra.t[0],rb.t[1]-rb.t[0])
+            t = np.arange(tmin,tmax+dt*0.9,dt)
+        elif self.method == 'chebyshev':
+            l1,u1 = ra.dom
+            l2,u2 = rb.dom
+            dom = np.array([min(l1,l2),max(u1,u2)])
+            midpoint = (dom[1] + dom[0])/2
+            halfwidth = (dom[1] - dom[0])/2
+            order = max(ra.order,rb.order)
+            t = npch.chebpts1(order) * halfwidth + midpoint
+
         rho = np.zeros((ra.bool_mask.size,t.size),dtype='complex')
         rho_a = ra(t)
         rho_b = rb(t)
@@ -172,7 +187,11 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         bool_mask = np.logical_or(ra.bool_mask,rb.bool_mask)
         rho = rho[bool_mask,:]
         
-        rab=perturbative_container(t,rho,bool_mask,pulse_number,manifold_key,pdc,t0)
+        if self.method == 'UF2':
+            rab=perturbative_container(t,rho,bool_mask,pulse_number,manifold_key,pdc,t0)
+        elif self.method == 'chebyshev':
+            rab=cheb_perturbative_container(t,rho,bool_mask,pulse_number,
+                                           manifold_key,pdc,t0,dom=dom)
         return rab
 
     def set_efields(self,times_list,efields_list,centers_list,
@@ -186,10 +205,10 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
             gamma_max = -np.min(np.real(self.eigenvalues[key]))
             largest_decay_rates.append(gamma_max)
         largest_decay_rate = np.max(largest_decay_rates)
-        if largest_decay_rate * max_calc_time > 40:
-            self.interaction_picture_calculations = False
-        else:
-            self.interaction_picture_calculations = True
+        # if largest_decay_rate * max_calc_time > 40:
+        #     self.interaction_picture_calculations = False
+        # else:
+        self.interaction_picture_calculations = False
         
         UF2BaseClass.set_efields(self,times_list,efields_list,centers_list,
                                  phase_discrimination,
@@ -236,7 +255,12 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
             ev = self.eigenvectors[manifold_key][:,mask]
             ket_size, bra_size = self.rho_shapes[manifold_key]
 
-        rho = rho_obj(t)*np.exp(e[:,np.newaxis]*t_exp[np.newaxis,:])
+        exp_arg = e[:,np.newaxis]*t_exp[np.newaxis,:]
+        if self.method == 'chebyshev':
+            exp_inds = np.where(np.real(exp_arg) > self.exp_cutoff)
+            exp_arg[exp_inds] = -self.exp_cutoff
+
+        rho = rho_obj(t)*np.exp(exp_arg)
         if original_L_basis:
             new_rho = ev.dot(rho)
         else:
@@ -273,8 +297,17 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
 
         t0 = 0
 
-        self.rho0 = perturbative_container(t,rho0,bool_mask,None,'0,0',pdc,t0,
-                                  interp_kind='zero',interp_left_fill=1)
+        key = '0,0'
+        
+        if self.method == 'UF2':
+            self.rho0 = perturbative_container(t,rho0,bool_mask,None,key,pdc,
+                                                t0,interp_kind='zero',
+                                                interp_left_fill=1)
+        elif self.method == 'chebyshev':
+            self.rho0 = cheb_perturbative_container(t,rho0,bool_mask,None,
+                                                    key,pdc,t0,
+                                                    interp_left_fill=1,
+                                                    dom = self.doms[0])
 
     def set_rho0_manual_L_eigenbasis(self,manifold_key,bool_mask,weights):
         """
@@ -759,6 +792,9 @@ alias transitions onto nonzero electric field amplitudes.
             t_exp_2 = t
 
         exp_factor2_arg = -ev2[n_nonzero,np.newaxis] * t_exp_2[np.newaxis,:]
+        if self.method == 'chebyshev':
+            exp_inds = np.where(np.real(exp_factor2_arg) > self.exp_cutoff)
+            exp_factor2_arg[exp_inds] = -self.exp_cutoff
         exp_factor2 = np.exp(exp_factor2_arg)
         
         if self.interaction_picture_calculations:
@@ -776,22 +812,41 @@ alias transitions onto nonzero electric field amplitudes.
         fft_convolve_fun = self.heaviside_convolve_list[pulse_number].fft_convolve2
 
         if M == 1:
-            pass
-        else:
-            if self.interaction_picture_calculations:
-                rho = fft_convolve_fun(rho,d=dt)
+            if self.method == 'chebyshev':
+                dom = self.doms[pulse_number] + pulse_time
             else:
-                rho = fft_convolve_fun(exp_factor2b,rho,d=dt)
+                pass
+        else:
+            if self.method == 'UF2':
+                if self.interaction_picture_calculations:
+                    rho = fft_convolve_fun(rho,d=dt)
+                else:
+                    rho = fft_convolve_fun(exp_factor2b,rho,d=dt)
+            elif self.method == 'chebyshev':
+                dom = self.doms[pulse_number] + pulse_time
+                if self.interaction_picture_calculations:
+                    chp = ChebPoly(t,rho,dom = dom)
+                else:
+                    chp = ChebPoly(t,rho * exp_factor2,dom = dom)
+                chp.integrate()
+                rho = chp(t)
 
         if not self.interaction_picture_calculations:
-            rho = rho * exp_factor2
+            if self.method == 'UF2':
+                rho = rho * exp_factor2
 
         t1 = time.time()
         self.convolution_time += t1-t0
 
-        rho_out = perturbative_container(t,rho,n_nonzero,pulse_number,
+        if self.method == 'UF2':
+            rho_out = perturbative_container(t,rho,n_nonzero,pulse_number,
                                 new_manifold_key,output_pdc,pulse_time,
                                 simultaneous=simultaneous)
+        
+        elif self.method == 'chebyshev':
+            rho_out = cheb_perturbative_container(t,rho,n_nonzero,pulse_number,
+                                new_manifold_key,output_pdc,pulse_time,
+                                simultaneous=simultaneous,dom = dom)
 
         self.next_order_counter += 1
         self.next_order_time += time.time() - tnext_order0
