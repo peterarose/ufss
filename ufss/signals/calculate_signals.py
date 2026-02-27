@@ -54,7 +54,7 @@ class CalculateSignals:
 """
         self.all_pulse_delays = all_delays
         num_delays = len(self.all_pulse_delays)
-        num_pulses = len(self.efields)
+        num_pulses = len(self.pdc_tuple)
         
         if num_delays == num_pulses - 1:
             pass
@@ -185,6 +185,11 @@ class CalculateSignals:
             return self.signal
         else:
             return self.signal_dict
+        
+    def set_t_manual(self,t):
+        self.t = t
+        dt = self.t[1] - self.t[0]
+        self.w = fftshift(fftfreq(self.t.size,d=dt)*2*np.pi)
 
     def set_t_general(self,optical_dephasing_rate,*,dt='auto'):
         """Sets the time grid upon which all frequency-detected signals will
@@ -546,8 +551,11 @@ class CalculateSignals:
 
         for name,delays in zip(pulse_delay_names,self.all_pulse_delays):
             save_dict[name] = delays
-        save_dict['efields'] = self.efields
-        save_dict['efield_times'] = self.efield_times
+        num_efields = len(self.efields)
+        save_dict['num_efields'] = num_efields
+        for i in range(num_efields):
+            save_dict['efield{}'.format(i)] = self.efields[i]
+            save_dict['efield_time{}'.format(i)] = self.efield_times[i]
         save_dict['centers'] = self.centers
         save_dict['pdc'] = self.pdc
         save_dict['polarization_sequence'] = self.polarization_sequence
@@ -596,6 +604,17 @@ class CalculateSignals:
             self.polarization_sequence = arch['polarization_sequence']
         except KeyError:
             pass
+        if 'num_efields' in arch.keys():
+            num_efields = arch['num_efields']
+            self.efields = []
+            self.efield_times = []
+            for i in range(num_efields):
+                self.efields.append(arch['efield{}'.format(i)])
+                self.efield_times.append(arch['efield_time{}'.format(i)])
+            self.centers = arch['centers']
+            self.pdc = arch['pdc']
+            self.polarization_sequence = arch['polarization_sequence']
+
 
 class CalculateSignalsOpen(CalculateSignals):
 
