@@ -53,10 +53,12 @@ import numpy as np
 import pytest
 import sys
 import os
+import tempfile
+import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from ufss.HLG.Hamiltonians import Polymer
+from ufss.HLG.Hamiltonians import Polymer, PolymerVibrations
 
 
 # ---------------------------------------------------------------------------
@@ -537,3 +539,209 @@ class Test4LS:
             make_4LS(tmpdir, omega0=1.0, tau_deph=100.0, kT=0.1)
             assert os.path.exists(os.path.join(tmpdir, 'closed', 'H.npz'))
             assert os.path.exists(os.path.join(tmpdir, 'closed', 'mu.npz'))
+
+
+# ---------------------------------------------------------------------------
+# Helpers for PolymerVibrations tests
+# ---------------------------------------------------------------------------
+
+def _write_params_yaml(tmpdir, params):
+    """Write a params dict to params.yaml in tmpdir, return the path."""
+    path = os.path.join(tmpdir, 'params.yaml')
+    with open(path, 'w') as f:
+        yaml.dump(params, f)
+    return path
+
+
+def _minimal_vib_mode(site_label, n_occ):
+    """Return a minimal harmonic vib-mode dict with n_occ electronic occupations."""
+    return {
+        'site_label': site_label,
+        'omega_g': 0.15,
+        'displacement': [0.1 * i for i in range(n_occ)],
+        'kinetic':      [[1]] * n_occ,
+        'potential':    [[1]] * n_occ,
+        'reorganization': [0.0] + [-0.01] * (n_occ - 1),
+    }
+
+
+def _params_2LS(truncation=3):
+    """Minimal single-site 2LS params (post-conversion format).
+    N=2 uses a flat list of scalar energies (not a list of lists).
+    Dipoles are shape (num_sites, 3) — one vector per site.
+    """
+    return {
+        'RWA': True,
+        'initial truncation size': truncation,
+        'site_energies': [1.0],          # scalar per site → N=2
+        'site_couplings': [],
+        'dipoles': [[1.0, 0.0, 0.0]],   # (num_sites, 3)
+        'vibrations': [_minimal_vib_mode(0, 2)],
+    }
+
+
+def _params_3LS(truncation=3):
+    """Minimal single-site 3LS params (post-conversion format)."""
+    return {
+        'RWA': True,
+        'initial truncation size': truncation,
+        'site_energies': [[1.0, 2.5]],
+        'site_couplings': {},
+        'dipoles': [[[1.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 0.0, 0.0]]],
+        'vibrations': [_minimal_vib_mode(0, 3)],
+    }
+
+
+def _params_4LS(truncation=3):
+    """Minimal single-site 4LS params (post-conversion format)."""
+    return {
+        'RWA': True,
+        'initial truncation size': truncation,
+        'site_energies': [[1.0, 2.5, 4.0]],
+        'site_couplings': {},
+        'dipoles': [[[1.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.3, 0.0, 0.0]]],
+        'vibrations': [_minimal_vib_mode(0, 4)],
+    }
+
+
+# ---------------------------------------------------------------------------
+# TestPolymerVibrations
+# ---------------------------------------------------------------------------
+
+class TestPolymerVibrations:
+
+    # --- 2LS ---
+
+    def test_2LS_runs(self):
+        """PolymerVibrations works for a single-site 2LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_2LS())
+            pv = PolymerVibrations(path)
+            assert pv.total_hamiltonian.ndim == 2
+            assert pv.total_hamiltonian.shape[0] == pv.total_hamiltonian.shape[1]
+
+    def test_2LS_H_saved(self):
+        """H.npz is written to the closed/ subdirectory for 2LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_2LS())
+            PolymerVibrations(path)
+            assert os.path.exists(os.path.join(tmpdir, 'closed', 'H.npz'))
+
+    def test_2LS_no_doubly_occupied_vibrations(self):
+        """For N=2, doubly_occupied_vibrations should not be set."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_2LS())
+            pv = PolymerVibrations(path)
+            assert not hasattr(pv, 'doubly_occupied_vibrations')
+
+    # --- 3LS ---
+
+    def test_3LS_runs(self):
+        """PolymerVibrations works for a single-site 3LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            pv = PolymerVibrations(path)
+            assert pv.total_hamiltonian.ndim == 2
+            assert pv.total_hamiltonian.shape[0] == pv.total_hamiltonian.shape[1]
+
+    def test_3LS_H_saved(self):
+        """H.npz is written to the closed/ subdirectory for 3LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            PolymerVibrations(path)
+            assert os.path.exists(os.path.join(tmpdir, 'closed', 'H.npz'))
+
+    def test_3LS_doubly_occupied_vibrations_populated(self):
+        """For N=3, doubly_occupied_vibrations should be a non-empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            pv = PolymerVibrations(path)
+            assert hasattr(pv, 'doubly_occupied_vibrations')
+            assert len(pv.doubly_occupied_vibrations) == pv.num_vibrations
+
+    def test_3LS_vibrational_hamiltonian_nonzero(self):
+        """The vibrational part of the Hamiltonian should be nonzero for 3LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            pv = PolymerVibrations(path)
+            assert np.any(pv.vibrational_hamiltonian != 0)
+
+    def test_3LS_no_triply_occupied_vibrations(self):
+        """For N=3, triply_occupied_vibrations should not be set."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            pv = PolymerVibrations(path)
+            assert not hasattr(pv, 'triply_occupied_vibrations')
+
+    def test_3LS_hamiltonian_is_hermitian(self):
+        """Total Hamiltonian must be Hermitian for 3LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_3LS())
+            pv = PolymerVibrations(path)
+            H = pv.total_hamiltonian
+            np.testing.assert_allclose(H, H.T.conj(), atol=1e-12)
+
+    # --- 4LS ---
+
+    def test_4LS_runs(self):
+        """PolymerVibrations works for a single-site 4LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            assert pv.total_hamiltonian.ndim == 2
+            assert pv.total_hamiltonian.shape[0] == pv.total_hamiltonian.shape[1]
+
+    def test_4LS_H_saved(self):
+        """H.npz is written to the closed/ subdirectory for 4LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            PolymerVibrations(path)
+            assert os.path.exists(os.path.join(tmpdir, 'closed', 'H.npz'))
+
+    def test_4LS_triply_occupied_vibrations_populated(self):
+        """For N=4, triply_occupied_vibrations should be a non-empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            assert hasattr(pv, 'triply_occupied_vibrations')
+            assert len(pv.triply_occupied_vibrations) == pv.num_vibrations
+
+    def test_4LS_doubly_occupied_vibrations_populated(self):
+        """For N=4, doubly_occupied_vibrations should also be populated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            assert hasattr(pv, 'doubly_occupied_vibrations')
+            assert len(pv.doubly_occupied_vibrations) == pv.num_vibrations
+
+    def test_4LS_vibrational_hamiltonian_nonzero(self):
+        """The vibrational part of the Hamiltonian should be nonzero for 4LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            assert np.any(pv.vibrational_hamiltonian != 0)
+
+    def test_4LS_hamiltonian_is_hermitian(self):
+        """Total Hamiltonian must be Hermitian for 4LS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            H = pv.total_hamiltonian
+            np.testing.assert_allclose(H, H.T.conj(), atol=1e-12)
+
+    def test_4LS_hilbert_space_larger_than_3LS(self):
+        """4LS vibronic Hilbert space must be larger than the equivalent 3LS one."""
+        with tempfile.TemporaryDirectory() as d3:
+            pv3 = PolymerVibrations(_write_params_yaml(d3, _params_3LS()))
+            with tempfile.TemporaryDirectory() as d4:
+                pv4 = PolymerVibrations(_write_params_yaml(d4, _params_4LS()))
+        assert pv4.total_hamiltonian.shape[0] > pv3.total_hamiltonian.shape[0]
+
+    def test_4LS_triply_occupied_contributes_to_hamiltonian(self):
+        """Triply-occupied vib term should contribute to the total Hamiltonian."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_params_yaml(tmpdir, _params_4LS())
+            pv = PolymerVibrations(path)
+            # Sum of triply-occupied vibrational terms
+            trip_sum = sum(pv.triply_occupied_vibrations)
+            assert np.any(trip_sum != 0)
