@@ -226,6 +226,12 @@ class RedfieldConstructor:
                     spec_density = self.make_spectral_density(self.params['bath']['site_bath2'][bath2_option])
                     self.SD['site_bath2'].append(spec_density)
 
+            if 'site_bath3' in self.params['bath']:
+                self.SD['site_bath3'] = []
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    bath3_option = self.params['bath']['site_bath3_option'][n]
+                    spec_density = self.make_spectral_density(self.params['bath']['site_bath3'][bath3_option])
+                    self.SD['site_bath3'].append(spec_density)
 
             if self.num_vibrations > 0 :
                 if 'vibration_bath' in self.params['bath'].keys():
@@ -247,6 +253,21 @@ class RedfieldConstructor:
 
             try:
                 self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath32'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath32'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath31'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath31'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath30'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath30'])
             except KeyError:
                 pass
 
@@ -272,12 +293,32 @@ class RedfieldConstructor:
                 pass
 
             try:
+                self.SD['site_bath3'] = self.make_spectral_density(self.params['bath']['site_bath3'])
+            except KeyError:
+                pass
+
+            try:
                 self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath21'])
             except KeyError:
                 pass
 
             try:
                 self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath32'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath32'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath31'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath31'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath30'] = self.make_spectral_density(self.params['bath']['site_internal_conversion_bath30'])
             except KeyError:
                 pass
 
@@ -404,7 +445,7 @@ class RedfieldConstructor:
                 Y2 += self.make_dissipation_tensor(P_n, manifold_key, spectral_density)
 
             # create the electronic dissipation tensor for doubly-excited site
-            if self.N == 3:
+            if self.N >= 3:
                 if 'site_bath2' in self.params['bath']:
                     for n in range(self.PolyVib.Polymer.num_sites):
                         spectral_density = self.SD['site_bath2'][n]
@@ -414,6 +455,19 @@ class RedfieldConstructor:
                         P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
 
                         Y2 += self.make_dissipation_tensor(P_n2, manifold_key, spectral_density)
+
+            # create the electronic dissipation tensor for triply-excited site
+            if self.N >= 4:
+                if 'site_bath3' in self.params['bath']:
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        spectral_density = self.SD['site_bath3'][n]
+                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
+                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
+
+                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
+
+                        Y2 += self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
+
         else :
             spectral_density = self.SD['site_bath']
             size = self.eigenvalues[manifold_key].size
@@ -428,7 +482,7 @@ class RedfieldConstructor:
                 Y2 += self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
 
             # create the electronic dissipation tensor for doubly-excited site
-            if self.N == 3:
+            if self.N >= 3:
                 if 'site_bath2' in self.params['bath']:
                     spectral_density = self.SD['site_bath2']
                     for n in range(self.PolyVib.Polymer.num_sites):
@@ -438,6 +492,18 @@ class RedfieldConstructor:
                         P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
 
                         Y2 += self.make_dissipation_tensor(P_n2,manifold_key,spectral_density)
+
+            # create the electronic dissipation tensor for triply-excited site
+            if self.N >= 4:
+                if 'site_bath3' in self.params['bath']:
+                    spectral_density = self.SD['site_bath3']
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
+                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
+
+                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
+
+                        Y2 += self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
 
         return Y2
 
@@ -467,7 +533,7 @@ class RedfieldConstructor:
 
             Y3 += self.make_dissipation_tensor(sigma_x_n,manifold_key,spectral_density)
 
-        if self.N == 3:
+        if self.N >= 3:
             if 'site_internal_conversion_bath21' in self.params['bath']:
                 spectral_density = self.SD['site_internal_conversion_bath21']
                 manifold_key = 'all_manifolds'
@@ -491,7 +557,44 @@ class RedfieldConstructor:
                     sigma_x_n20 = up_n20 + up_n20.T
 
                     Y3 += self.make_dissipation_tensor(sigma_x_n20, manifold_key, spectral_density)
-                
+
+        if self.N >= 4:
+            if 'site_internal_conversion_bath32' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath32']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n32 = self.PolyVib.Polymer.up32_list[n]
+                    up_n32 = self.extract_electronic_operator(up_n32, manifold_key)
+                    up_n32 = np.kron(up_n32, self.PolyVib.vibrational_identity)
+                    sigma_x_n32 = up_n32 + up_n32.T
+
+                    Y3 += self.make_dissipation_tensor(sigma_x_n32, manifold_key, spectral_density)
+
+            if 'site_internal_conversion_bath31' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath31']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n31 = self.PolyVib.Polymer.up31_list[n]
+                    up_n31 = self.extract_electronic_operator(up_n31, manifold_key)
+                    up_n31 = np.kron(up_n31, self.PolyVib.vibrational_identity)
+                    sigma_x_n31 = up_n31 + up_n31.T
+
+                    Y3 += self.make_dissipation_tensor(sigma_x_n31, manifold_key, spectral_density)
+
+            if 'site_internal_conversion_bath30' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath30']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n30 = self.PolyVib.Polymer.up30_list[n]
+                    up_n30 = self.extract_electronic_operator(up_n30, manifold_key)
+                    up_n30 = np.kron(up_n30, self.PolyVib.vibrational_identity)
+                    sigma_x_n30 = up_n30 + up_n30.T
+
+                    Y3 += self.make_dissipation_tensor(sigma_x_n30, manifold_key, spectral_density)
+
         return Y3
 
     def make_R_from_Y(self,Y,manifold_key):
@@ -848,6 +951,13 @@ class SecularRedfieldConstructor:
                     spec_density = self.make_spectral_density(self.params['bath']['site_bath2'][bath2_option])
                     self.SD['site_bath2'].append(spec_density)
 
+            if 'site_bath3' in self.params['bath']:
+                self.SD['site_bath3'] = []
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    bath3_option = self.params['bath']['site_bath3_option'][n]
+                    spec_density = self.make_spectral_density(self.params['bath']['site_bath3'][bath3_option])
+                    self.SD['site_bath3'].append(spec_density)
+
             if self.num_vibrations > 0:
                 self.SD['vibration_bath'] = self.make_spectral_density(self.params['bath']['vibration_bath'])
             try:
@@ -868,6 +978,24 @@ class SecularRedfieldConstructor:
             try:
                 self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(
                     self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath32'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath32'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath31'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath31'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath30'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath30'])
             except KeyError:
                 pass
 
@@ -891,6 +1019,11 @@ class SecularRedfieldConstructor:
                 pass
 
             try:
+                self.SD['site_bath3'] = self.make_spectral_density(self.params['bath']['site_bath3'])
+            except KeyError:
+                pass
+
+            try:
                 self.SD['site_internal_conversion_bath21'] = self.make_spectral_density(
                     self.params['bath']['site_internal_conversion_bath21'])
             except KeyError:
@@ -899,6 +1032,24 @@ class SecularRedfieldConstructor:
             try:
                 self.SD['site_internal_conversion_bath20'] = self.make_spectral_density(
                     self.params['bath']['site_internal_conversion_bath20'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath32'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath32'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath31'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath31'])
+            except KeyError:
+                pass
+
+            try:
+                self.SD['site_internal_conversion_bath30'] = self.make_spectral_density(
+                    self.params['bath']['site_internal_conversion_bath30'])
             except KeyError:
                 pass
 
@@ -1039,7 +1190,7 @@ class SecularRedfieldConstructor:
                 Y2_ijij += b
                 Y2_ijji += c
 
-            if self.N == 3:
+            if self.N >= 3:
                 if 'site_bath2' in self.params['bath']:
 
                     for n in range(self.PolyVib.Polymer.num_sites):
@@ -1052,6 +1203,21 @@ class SecularRedfieldConstructor:
                         Y2_iikk += a2
                         Y2_ijij += b2
                         Y2_ijji += c2
+
+            if self.N >= 4:
+                if 'site_bath3' in self.params['bath']:
+
+                    for n in range(self.PolyVib.Polymer.num_sites):
+                        spectral_density = self.SD['site_bath3'][n]
+                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
+                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
+
+                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
+                        a3, b3, c3 = self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
+                        Y2_iikk += a3
+                        Y2_ijij += b3
+                        Y2_ijji += c3
+
         else :
             spectral_density = self.SD['site_bath']
             size = self.eigenvalues[manifold_key].size
@@ -1070,7 +1236,7 @@ class SecularRedfieldConstructor:
                 Y2_ijij += b
                 Y2_ijji += c
 
-            if self.N == 3:
+            if self.N >= 3:
                 if 'site_bath2' in self.params['bath']:
                     spectral_density = self.SD['site_bath2']
 
@@ -1084,6 +1250,21 @@ class SecularRedfieldConstructor:
                         Y2_iikk += a2
                         Y2_ijij += b2
                         Y2_ijji += c2
+
+            if self.N >= 4:
+                if 'site_bath3' in self.params['bath']:
+                    spectral_density = self.SD['site_bath3']
+
+                    for n in range(self.PolyVib.Polymer.num_sites):
+
+                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
+                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
+
+                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
+                        a3, b3, c3 = self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
+                        Y2_iikk += a3
+                        Y2_ijij += b3
+                        Y2_ijji += c3
 
         return Y2_iikk, Y2_ijij, Y2_ijji
 
@@ -1120,7 +1301,7 @@ class SecularRedfieldConstructor:
             Y3_ijij += b
             Y3_ijji += c
 
-        if self.N == 3:
+        if self.N >= 3:
             if 'site_internal_conversion_bath21' in self.params['bath']:
                 spectral_density = self.SD['site_internal_conversion_bath21']
                 manifold_key = 'all_manifolds'
@@ -1153,7 +1334,55 @@ class SecularRedfieldConstructor:
                     Y3_ijij += b20
                     Y3_ijji += c20
 
-                
+        if self.N >= 4:
+            if 'site_internal_conversion_bath32' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath32']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+
+                    up_n32 = self.PolyVib.Polymer.up32_list[n]
+                    up_n32 = self.extract_electronic_operator(up_n32, manifold_key)
+                    up_n32 = np.kron(up_n32, self.PolyVib.vibrational_identity)
+                    sigma_x_n32 = up_n32 + up_n32.T
+
+                    a32, b32, c32 = self.make_dissipation_tensor(sigma_x_n32, manifold_key, spectral_density)
+                    Y3_iikk += a32
+                    Y3_ijij += b32
+                    Y3_ijji += c32
+
+            if 'site_internal_conversion_bath31' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath31']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+
+                    up_n31 = self.PolyVib.Polymer.up31_list[n]
+                    up_n31 = self.extract_electronic_operator(up_n31, manifold_key)
+                    up_n31 = np.kron(up_n31, self.PolyVib.vibrational_identity)
+                    sigma_x_n31 = up_n31 + up_n31.T
+
+                    a31, b31, c31 = self.make_dissipation_tensor(sigma_x_n31, manifold_key, spectral_density)
+                    Y3_iikk += a31
+                    Y3_ijij += b31
+                    Y3_ijji += c31
+
+            if 'site_internal_conversion_bath30' in self.params['bath']:
+                spectral_density = self.SD['site_internal_conversion_bath30']
+                manifold_key = 'all_manifolds'
+
+                for n in range(self.PolyVib.Polymer.num_sites):
+
+                    up_n30 = self.PolyVib.Polymer.up30_list[n]
+                    up_n30 = self.extract_electronic_operator(up_n30, manifold_key)
+                    up_n30 = np.kron(up_n30, self.PolyVib.vibrational_identity)
+                    sigma_x_n30 = up_n30 + up_n30.T
+
+                    a30, b30, c30 = self.make_dissipation_tensor(sigma_x_n30, manifold_key, spectral_density)
+                    Y3_iikk += a30
+                    Y3_ijij += b30
+                    Y3_ijji += c30
+
         return Y3_iikk, Y3_ijij, Y3_ijji
 
     def make_R_from_Y(self,Yiikk,Yijij,Yijji):

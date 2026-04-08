@@ -639,6 +639,7 @@ class Polymer:
         # For 4LS
         if self.N == 4:
             self.set_doubly_occupied_list()
+            self.set_triply_occupied_list()
             self.set_exchange_list_G()
             self.set_exchange_list_GG()
             self.set_exchange_list_C()
@@ -800,6 +801,9 @@ class Polymer:
 
     def set_doubly_occupied_list(self):
         self.doubly_occupied_list = self.make_single_operator_list(self.occupied_2)
+
+    def set_triply_occupied_list(self):
+        self.triply_occupied_list = self.make_single_operator_list(self.occupied_3)
 
     def set_up_list(self):
         self.up_list = self.make_single_operator_list(self.up)
@@ -1387,14 +1391,18 @@ class PolymerVibrations():
     def add_vibrations(self):
         v0 = self.empty_vibrations
         v1 = self.occupied_vibrations
-        if self.Polymer.N == 3:
+        if self.Polymer.N >= 3:
             v2 = self.doubly_occupied_vibrations
+        if self.Polymer.N >= 4:
+            v3 = self.triply_occupied_vibrations
         self.vibrational_hamiltonian = np.zeros(self.total_hamiltonian.shape)
         for i in range(len(v0)):
             self.vibrational_hamiltonian += v0[i]
             self.vibrational_hamiltonian += v1[i]
-            if self.Polymer.N == 3:
+            if self.Polymer.N >= 3:
                 self.vibrational_hamiltonian += v2[i]
+            if self.Polymer.N >= 4:
+                self.vibrational_hamiltonian += v3[i]
 
         self.total_hamiltonian = self.total_hamiltonian + self.vibrational_hamiltonian
 
@@ -1419,8 +1427,11 @@ class PolymerVibrations():
         self.num_vibrations = len(emp_vibs)
         occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,1)
                     for mode_dict in vibration_params]
-        if self.Polymer.N == 3:
+        if self.Polymer.N >= 3:
             doub_occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,2)
+                        for mode_dict in vibration_params]
+        if self.Polymer.N >= 4:
+            trip_occ_vibs = [self.construct_vibrational_hamiltonian(mode_dict,3)
                         for mode_dict in vibration_params]
 
         if self.occupation_num_mask:
@@ -1433,28 +1444,37 @@ class PolymerVibrations():
             self.vibrational_identity = np.eye(N**nv)
         empty_vibrations = self.kron_up_vibrations(emp_vibs)
         occupied_vibrations = self.kron_up_vibrations(occ_vibs)
-        if self.Polymer.N == 3:
+        if self.Polymer.N >= 3:
             doubly_occupied_vibrations = self.kron_up_vibrations(doub_occ_vibs)
+        if self.Polymer.N >= 4:
+            triply_occupied_vibrations = self.kron_up_vibrations(trip_occ_vibs)
 
         self.empty_vibrations = []
         self.occupied_vibrations = []
-        if self.Polymer.N == 3:
+        if self.Polymer.N >= 3:
             self.doubly_occupied_vibrations = []
-        
+        if self.Polymer.N >= 4:
+            self.triply_occupied_vibrations = []
+
         for i in range(self.num_vibrations):
             site_index = vibration_params[i]['site_label']
             empty = self.Polymer.empty_list[site_index]
             empty = self.Polymer.extract_electronic_subspace(empty,0,self.maximum_manifold)
             occupied = self.Polymer.occupied_list[site_index]
             occupied = self.Polymer.extract_electronic_subspace(occupied,0,self.maximum_manifold)
-            if self.Polymer.N == 3:
+            if self.Polymer.N >= 3:
                 doubly_occupied = self.Polymer.doubly_occupied_list[site_index]
                 doubly_occupied = self.Polymer.extract_electronic_subspace(doubly_occupied,0,self.maximum_manifold)
-            
+            if self.Polymer.N >= 4:
+                triply_occupied = self.Polymer.triply_occupied_list[site_index]
+                triply_occupied = self.Polymer.extract_electronic_subspace(triply_occupied,0,self.maximum_manifold)
+
             self.empty_vibrations.append(np.kron(empty,empty_vibrations[i]))
             self.occupied_vibrations.append(np.kron(occupied,occupied_vibrations[i]))
-            if self.Polymer.N == 3:
+            if self.Polymer.N >= 3:
                 self.doubly_occupied_vibrations.append(np.kron(doubly_occupied,doubly_occupied_vibrations[i]))
+            if self.Polymer.N >= 4:
+                self.triply_occupied_vibrations.append(np.kron(triply_occupied,triply_occupied_vibrations[i]))
 
     def kron_up_vibrations(self,vibrations_list):
         n = self.num_vibrations
