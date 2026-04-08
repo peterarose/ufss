@@ -639,6 +639,7 @@ class Polymer:
         # For 4LS
         if self.N == 4:
             self.set_doubly_occupied_list()
+            self.set_triply_occupied_list()
             self.set_exchange_list_G()
             self.set_exchange_list_GG()
             self.set_exchange_list_C()
@@ -800,6 +801,9 @@ class Polymer:
 
     def set_doubly_occupied_list(self):
         self.doubly_occupied_list = self.make_single_operator_list(self.occupied_2)
+
+    def set_triply_occupied_list(self):
+        self.triply_occupied_list = self.make_single_operator_list(self.occupied_3)
 
     def set_up_list(self):
         self.up_list = self.make_single_operator_list(self.up)
