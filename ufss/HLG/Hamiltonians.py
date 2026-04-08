@@ -488,7 +488,10 @@ class Polymer:
         self.num_sites = len(site_energies)
 
         if isinstance(site_energies[0], list):
-            self.N = 3
+            if len(site_energies[0]) == 2:
+                self.N = 3
+            else:
+                self.N = 4
         else:
             self.N = 2
             self.energies = site_energies
@@ -509,24 +512,51 @@ class Polymer:
                 self.energies.append(egy)
                 egy = site_energies[i][1]  # list of second excitation energies
                 self.double_energies.append(egy)
-            # Couplings matrices for 3LS
+            # Couplings matrices for 3LS — supports dict, 4-element list (J,K,L,K1), and old 3-element list
             if self.num_sites == 1:
                 self.J_list = []
                 self.K_list = []
+                self.K1_list = []
                 self.L_list = []
+            elif isinstance(site_couplings, dict):
+                self.J_list, self.K_list, self.K1_list, self.L_list = \
+                    self._parse_coupling_dict(['J', 'K', 'K1', 'L'], site_couplings)
             elif isinstance(site_couplings[0][0], list) or isinstance(site_couplings[0][0], np.ndarray):
                 self.J_list = []
                 self.K_list = []
+                self.K1_list = []
                 self.L_list = []
+                k1_mat = site_couplings[3] if len(site_couplings) > 3 else None
                 for i in range(self.num_sites):
                     for j in range(i+1,self.num_sites):
                         self.J_list.append(site_couplings[0][i][j])
                         self.K_list.append(site_couplings[1][i][j])
                         self.L_list.append(site_couplings[2][i][j])
+                        self.K1_list.append(k1_mat[i][j] if k1_mat is not None else 0.0)
             else:
                 self.J_list = site_couplings[0]
                 self.K_list = site_couplings[1]
                 self.L_list = site_couplings[2]
+                self.K1_list = [0.0] * len(self.J_list)
+
+        if self.N == 4:
+            self.energies = []
+            self.double_energies = []
+            self.triple_energies = []
+            for i in range(self.num_sites):
+                self.energies.append(site_energies[i][0])
+                self.double_energies.append(site_energies[i][1])
+                self.triple_energies.append(site_energies[i][2])
+            _4ls_keys = ['J', 'K', 'K1', 'L', 'L1', 'L2', 'L3', 'M0', 'M1', 'N0']
+            if isinstance(site_couplings, dict):
+                (self.J_list, self.K_list, self.K1_list, self.L_list,
+                 self.L1_list, self.L2_list, self.L3_list,
+                 self.M0_list, self.M1_list, self.N0_list) = \
+                    self._parse_coupling_dict(_4ls_keys, site_couplings)
+            else:
+                n_pairs = self.num_sites * (self.num_sites - 1) // 2
+                for key in _4ls_keys:
+                    setattr(self, key + '_list', [0.0] * n_pairs)
 
         self.dipoles = dipoles
         self.pols = ['x', 'y', 'z']
@@ -564,6 +594,25 @@ class Polymer:
 
             self.empty = self.basis(0, 0)
 
+        # For a 4LS
+        if self.N == 4:
+            self.up10 = self.basis(1, 0)  # a† = |e><g|
+            self.up20 = self.basis(2, 0)  # b† = |f><g|
+            self.up21 = self.basis(2, 1)  # c† = |f><e|
+            self.up30 = self.basis(3, 0)  # d† = |h><g|
+            self.up31 = self.basis(3, 1)  # p† = |h><e|
+            self.up32 = self.basis(3, 2)  # q† = |h><f|
+            self.down01 = self.basis(0, 1)  # a
+            self.down02 = self.basis(0, 2)  # b
+            self.down12 = self.basis(1, 2)  # c
+            self.down03 = self.basis(0, 3)  # d
+            self.down13 = self.basis(1, 3)  # p
+            self.down23 = self.basis(2, 3)  # q
+            self.occupied_1 = self.basis(1, 1)
+            self.occupied_2 = self.basis(2, 2)
+            self.occupied_3 = self.basis(3, 3)
+            self.empty = self.basis(0, 0)
+
         ### Kron up the single 2LS operators to act on the full Hilbert space of the polymer
 
         self.set_up_list()
@@ -584,6 +633,35 @@ class Polymer:
             self.set_down01_list()
             self.set_down12_list()
             self.set_down02_list()
+            if self.num_sites > 1:
+                self.set_exchange_list_K1()
+
+        # For 4LS
+        if self.N == 4:
+            self.set_doubly_occupied_list()
+            self.set_exchange_list_G()
+            self.set_exchange_list_GG()
+            self.set_exchange_list_C()
+            self.set_up10_list()
+            self.set_up21_list()
+            self.set_up20_list()
+            self.set_down01_list()
+            self.set_down12_list()
+            self.set_down02_list()
+            self.set_up30_list()
+            self.set_up31_list()
+            self.set_up32_list()
+            self.set_down03_list()
+            self.set_down13_list()
+            self.set_down23_list()
+            if self.num_sites > 1:
+                self.set_exchange_list_K1()
+                self.set_exchange_list_L1()
+                self.set_exchange_list_L2()
+                self.set_exchange_list_L3()
+                self.set_exchange_list_M0()
+                self.set_exchange_list_M1()
+                self.set_exchange_list_N0()
 
         ## Make Hamiltonian (total and by manifold)
 
@@ -744,6 +822,25 @@ class Polymer:
     def set_down02_list(self):
         self.down02_list = self.make_single_operator_list(self.down02)
 
+    # 4LS-only single-operator lists
+    def set_up30_list(self):
+        self.up30_list = self.make_single_operator_list(self.up30)
+
+    def set_up31_list(self):
+        self.up31_list = self.make_single_operator_list(self.up31)
+
+    def set_up32_list(self):
+        self.up32_list = self.make_single_operator_list(self.up32)
+
+    def set_down03_list(self):
+        self.down03_list = self.make_single_operator_list(self.down03)
+
+    def set_down13_list(self):
+        self.down13_list = self.make_single_operator_list(self.down13)
+
+    def set_down23_list(self):
+        self.down23_list = self.make_single_operator_list(self.down23)
+
     def set_down_list(self):
         self.down_list = self.make_single_operator_list(self.down)
 
@@ -761,6 +858,39 @@ class Polymer:
 
     def set_exchange_list_C(self):
         self.exchange_list_C = self.make_multi_operator_list([self.up21, self.down12])  # c_dagger * c
+
+    # K1 and 4LS-only exchange lists
+    def set_exchange_list_K1(self):
+        self.exchange_list_K1 = self.make_multi_operator_list([self.up20, self.down02])  # b†_i b_j
+
+    def set_exchange_list_L1(self):
+        self.exchange_list_L1 = self.make_multi_operator_list([self.up32, self.down01])  # q†_i a_j
+
+    def set_exchange_list_L2(self):
+        self.exchange_list_L2 = self.make_multi_operator_list([self.up31, self.down02])  # p†_i b_j
+
+    def set_exchange_list_L3(self):
+        self.exchange_list_L3 = self.make_multi_operator_list([self.up30, self.down03])  # d†_i d_j
+
+    def set_exchange_list_M0(self):
+        self.exchange_list_M0 = self.make_multi_operator_list([self.up32, self.down12])  # q†_i c_j
+
+    def set_exchange_list_M1(self):
+        self.exchange_list_M1 = self.make_multi_operator_list([self.up31, self.down13])  # p†_i p_j
+
+    def set_exchange_list_N0(self):
+        self.exchange_list_N0 = self.make_multi_operator_list([self.up32, self.down23])  # q†_i q_j
+
+    def _parse_coupling_dict(self, keys, site_couplings):
+        """Parse a dict of coupling matrices into lists of upper-triangle values."""
+        result = []
+        zero_mat = [[0.0] * self.num_sites for _ in range(self.num_sites)]
+        for key in keys:
+            mat = site_couplings.get(key, zero_mat)
+            lst = [mat[i][j] for i in range(self.num_sites)
+                   for j in range(i + 1, self.num_sites)]
+            result.append(lst)
+        return result
 
     def set_mono_H_list(self):
         self.mono_list = self.make_single_operator_list(self.H_i)
@@ -909,9 +1039,60 @@ class Polymer:
                 self.H3 += self.L_list[i] * self.exchange_list_C[i]
                 self.H3 += np.conjugate(self.L_list[i]) * self.exchange_list_C[i].T
 
+            for i in range(len(self.K1_list)):
+                self.H2 += self.K1_list[i] * self.exchange_list_K1[i]
+                self.H2 += np.conjugate(self.K1_list[i]) * self.exchange_list_K1[i].T
+
             electronic_hamiltonian = self.H0 + self.H1 + self.H2 + self.H3
 
             return electronic_hamiltonian
+
+        if self.N == 4:
+            self.H_i = []
+            H_coup = np.zeros((self.H_dim, self.H_dim))
+
+            for i in range(self.num_sites):
+                self.mono_H = np.zeros((self.N, self.N))
+                self.mono_H[1][1] = self.energies[i]
+                self.mono_H[2][2] = self.double_energies[i]
+                self.mono_H[3][3] = self.triple_energies[i]
+                self.H_i.append(self.mono_H)
+
+            self.HI = self.make_HI_i(self.H_i)
+            self.H0 = np.zeros((self.H_dim, self.H_dim))
+            for i in range(len(self.HI)):
+                self.H0 += self.HI[i]
+
+            def _add_coupling(H, coupling_list, exchange_list):
+                for i, c in enumerate(coupling_list):
+                    H += c * exchange_list[i]
+                    H += np.conjugate(c) * exchange_list[i].T
+
+            # J: a†_i a_j
+            _add_coupling(H_coup, self.J_list, self.exchange_list)
+            # K: c†_i a_j + h.c. (exchange_list_G + exchange_list_GG.T combined)
+            for i in range(len(self.K_list)):
+                H_coup += self.K_list[i] * (self.exchange_list_G[i] + self.exchange_list_GG[i].T)
+                H_coup += np.conjugate(self.K_list[i]) * (self.exchange_list_G[i].T + self.exchange_list_GG[i])
+            # K1: b†_i b_j
+            if self.num_sites > 1:
+                _add_coupling(H_coup, self.K1_list, self.exchange_list_K1)
+                # L: c†_i c_j
+                _add_coupling(H_coup, self.L_list, self.exchange_list_C)
+                # L1: q†_i a_j
+                _add_coupling(H_coup, self.L1_list, self.exchange_list_L1)
+                # L2: p†_i b_j
+                _add_coupling(H_coup, self.L2_list, self.exchange_list_L2)
+                # L3: d†_i d_j
+                _add_coupling(H_coup, self.L3_list, self.exchange_list_L3)
+                # M0: q†_i c_j
+                _add_coupling(H_coup, self.M0_list, self.exchange_list_M0)
+                # M1: p†_i p_j
+                _add_coupling(H_coup, self.M1_list, self.exchange_list_M1)
+                # N0: q†_i q_j
+                _add_coupling(H_coup, self.N0_list, self.exchange_list_N0)
+
+            return self.H0 + H_coup
 
     def set_electronic_hamiltonian(self):
         self.electronic_hamiltonian = self.make_electronic_hamiltonian()
@@ -936,7 +1117,7 @@ class Polymer:
     def set_manifold_eigensystems(self):
         self.electronic_eigenvalues_by_manifold = []
         self.electronic_eigenvectors_by_manifold = []
-        for i in range(self.num_sites + 1):
+        for i in range(self.maximum_manifold + 1):
             e, v = self.make_manifold_eigensystem(i)
             self.electronic_eigenvalues_by_manifold.append(e)
             self.electronic_eigenvectors_by_manifold.append(v)
@@ -950,7 +1131,7 @@ class Polymer:
         H = self.electronic_hamiltonian
         eigvecs = np.zeros(H.shape)
         d = np.zeros(H.shape)
-        for i in range(self.num_sites + 1):
+        for i in range(self.maximum_manifold + 1):
             e, v = self.get_eigensystem_by_manifold(i)
             if i == 1:
                 self.exciton_energies = e
@@ -967,17 +1148,31 @@ class Polymer:
 
     ### Tools for making the dipole operator
 
+    def _dipole_components_4LS(self, site_idx, pol_idx):
+        """Return the 6 per-site dipole amplitudes for a 4LS site.
+
+        Handles both the 3-vector shortcut (shape ..., 3, 3) and the full
+        6-vector form (shape ..., 6, 3).  For the shortcut, d_gf=d_gh=d_eh=0.
+        """
+        d = self.dipoles[site_idx, :, pol_idx]  # shape (3,) or (6,)
+        d_ge = d[0]
+        d_ef = d[1]
+        d_fh = d[2]
+        d_gf = d[3] if len(d) > 3 else 0.0
+        d_gh = d[4] if len(d) > 4 else 0.0
+        d_eh = d[5] if len(d) > 5 else 0.0
+        return d_ge, d_ef, d_fh, d_gf, d_gh, d_eh
+
     def make_mu_site_basis(self, pol):
+        pol_idx = {'x': 0, 'y': 1, 'z': 2}[pol]
         if self.N == 2:
-            pol_dict = {'x': 0, 'y': 1, 'z': 2}
-            d = self.dipoles[:, pol_dict[pol]]
+            d = self.dipoles[:, pol_idx]
             self.mu = d[0] * (self.up_list[0] + self.down_list[0])
             for i in range(1, len(self.up_list)):
                 self.mu += d[i] * (self.up_list[i] + self.down_list[i])
 
         elif self.N == 3:
-            pol_dict = {'x': 0, 'y': 1, 'z': 2}
-            d = self.dipoles[..., pol_dict[pol]]
+            d = self.dipoles[..., pol_idx]
             self.mu_10_01 = d[0,0] * (self.up10_list[0].copy() + self.down01_list[0].copy())
             self.mu_21_12 = d[0,1] * (self.up21_list[0].copy() + self.down12_list[0].copy())
             self.mu_20_02 = d[0,2] * (self.up20_list[0].copy() + self.down02_list[0].copy())
@@ -987,30 +1182,39 @@ class Polymer:
                 self.mu_20_02 += d[i,2] * (self.up20_list[i] + self.down02_list[i])
             self.mu = self.mu_10_01 + self.mu_21_12 + self.mu_20_02
 
-    def make_mu_dict_site_basis(self):
-        if self.N == 2:
-            self.mu_dict = dict()
-            for pol in self.pols:
-                self.make_mu_site_basis(pol)
-                self.mu_dict[pol] = self.mu.copy()
+        elif self.N == 4:
+            d_ge, d_ef, d_fh, d_gf, d_gh, d_eh = self._dipole_components_4LS(0, pol_idx)
+            self.mu = (d_ge * (self.up10_list[0] + self.down01_list[0])
+                       + d_ef * (self.up21_list[0] + self.down12_list[0])
+                       + d_fh * (self.up32_list[0] + self.down23_list[0])
+                       + d_gf * (self.up20_list[0] + self.down02_list[0])
+                       + d_gh * (self.up30_list[0] + self.down03_list[0])
+                       + d_eh * (self.up31_list[0] + self.down13_list[0]))
+            for i in range(1, self.num_sites):
+                d_ge, d_ef, d_fh, d_gf, d_gh, d_eh = self._dipole_components_4LS(i, pol_idx)
+                self.mu += (d_ge * (self.up10_list[i] + self.down01_list[i])
+                            + d_ef * (self.up21_list[i] + self.down12_list[i])
+                            + d_fh * (self.up32_list[i] + self.down23_list[i])
+                            + d_gf * (self.up20_list[i] + self.down02_list[i])
+                            + d_gh * (self.up30_list[i] + self.down03_list[i])
+                            + d_eh * (self.up31_list[i] + self.down13_list[i]))
 
-        elif self.N == 3 :
-            self.mu_dict = dict()
-            for pol in self.pols:
-                self.make_mu_site_basis(pol)
-                self.mu_dict[pol] = self.mu.copy()
+    def make_mu_dict_site_basis(self):
+        self.mu_dict = dict()
+        for pol in self.pols:
+            self.make_mu_site_basis(pol)
+            self.mu_dict[pol] = self.mu.copy()
 
     def make_mu_up_site_basis(self, pol):
+        pol_idx = {'x': 0, 'y': 1, 'z': 2}[pol]
         if self.N == 2:
-            pol_dict = {'x': 0, 'y': 1, 'z': 2}
-            d = self.dipoles[:, pol_dict[pol]]
+            d = self.dipoles[:, pol_idx]
             self.mu_ket_up = self.up_list[0].copy() * d[0]
             for i in range(1, len(self.up_list)):
                 self.mu_ket_up += self.up_list[i] * d[i]
 
         elif self.N == 3:
-            pol_dict = {'x': 0, 'y': 1, 'z': 2}
-            d = self.dipoles[..., pol_dict[pol]]
+            d = self.dipoles[..., pol_idx]
             self.mu_ket_up10 = self.up10_list[0].copy() * d[0, 0]
             self.mu_ket_up21 = self.up21_list[0].copy() * d[0, 1]
             self.mu_ket_up20 = self.up20_list[0].copy() * d[0, 2]
@@ -1020,17 +1224,28 @@ class Polymer:
                 self.mu_ket_up20 += self.up20_list[i] * d[i, 2]
             self.mu_ket_up = self.mu_ket_up10 + self.mu_ket_up21 + self.mu_ket_up20
 
+        elif self.N == 4:
+            d_ge, d_ef, d_fh, d_gf, d_gh, d_eh = self._dipole_components_4LS(0, pol_idx)
+            self.mu_ket_up = (d_ge * self.up10_list[0].copy()
+                              + d_ef * self.up21_list[0].copy()
+                              + d_fh * self.up32_list[0].copy()
+                              + d_gf * self.up20_list[0].copy()
+                              + d_gh * self.up30_list[0].copy()
+                              + d_eh * self.up31_list[0].copy())
+            for i in range(1, self.num_sites):
+                d_ge, d_ef, d_fh, d_gf, d_gh, d_eh = self._dipole_components_4LS(i, pol_idx)
+                self.mu_ket_up += (d_ge * self.up10_list[i]
+                                   + d_ef * self.up21_list[i]
+                                   + d_fh * self.up32_list[i]
+                                   + d_gf * self.up20_list[i]
+                                   + d_gh * self.up30_list[i]
+                                   + d_eh * self.up31_list[i])
+
     def make_mu_up_dict_site_basis(self):
-        if self.N == 2:
-            self.mu_up_dict = dict()
-            for pol in self.pols:
-                self.make_mu_up_site_basis(pol)
-                self.mu_up_dict[pol] = self.mu_ket_up.copy()
-        if self.N == 3:
-            self.mu_up_dict = dict()
-            for pol in self.pols:
-                self.make_mu_up_site_basis(pol)
-                self.mu_up_dict[pol] = self.mu_ket_up.copy()
+        self.mu_up_dict = dict()
+        for pol in self.pols:
+            self.make_mu_up_site_basis(pol)
+            self.mu_up_dict[pol] = self.mu_ket_up.copy()
 
 
     def make_mu_up_3d(self):
