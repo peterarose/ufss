@@ -130,10 +130,11 @@ class Spectroscopy2D(SpectroscopyBase):
 
 class Rephasing(Spectroscopy2D):
 
-    def __init__(self,file_name,*,engine_name = 'UF2',conserve_memory=False):
+    def __init__(self,file_name,*,engine_name = 'UF2',conserve_memory=False,
+                 interp_kind='linear'):
         super().__init__(file_name,engine_name = engine_name,
                          detection_type='complex_polarization',
-                         conserve_memory=conserve_memory)
+                         conserve_memory=conserve_memory,interp_kind=interp_kind)
 
         pdc = ((0,1),(1,0),(1,0))
         self.set_phase_discrimination(pdc)
@@ -146,10 +147,11 @@ class Rephasing(Spectroscopy2D):
 
 class NonRephasing(Spectroscopy2D):
 
-    def __init__(self,file_name,*,engine_name = 'UF2',conserve_memory=False):
+    def __init__(self,file_name,*,engine_name = 'UF2',conserve_memory=False,
+                 interp_kind='linear'):
         super().__init__(file_name,engine_name = engine_name,
                          detection_type='complex_polarization',
-                         conserve_memory=conserve_memory)
+                         conserve_memory=conserve_memory,interp_kind=interp_kind)
 
         pdc = ((1,0),(0,1),(1,0))
         self.set_phase_discrimination(pdc)
@@ -162,9 +164,10 @@ class NonRephasing(Spectroscopy2D):
 
 class PumpPumpProbe(Spectroscopy2D):
     def __init__(self,file_name,*,engine_name = 'UF2',conserve_memory=False,
-                 include_linear=False,include_wtau_DC_terms=False):
+                 include_linear=False,include_wtau_DC_terms=False,
+                 interp_kind='linear'):
         super().__init__(file_name,engine_name=engine_name,
-                         conserve_memory=conserve_memory)
+                         conserve_memory=conserve_memory,interp_kind=interp_kind)
         self.pdc = ((0,0),(0,0),(1,0))
         self.save_name = 'pump_pump_probe_signals'
         self.rephasing = True #used for tau Fourier convention

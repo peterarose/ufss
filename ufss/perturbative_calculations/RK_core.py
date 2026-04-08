@@ -25,7 +25,7 @@ class RKClosedEngine(ClosedBaseClass,DPBaseClass):
         initial_state (int): index of initial state for psi^0 NOT IMPLEMENTED YET
 
 """
-    def __init__(self,file_path,*,initial_state=0,
+    def __init__(self,file_path,*,initial_state=0,interp_kind = 'linear',
                  detection_type = 'polarization'):
         DPBaseClass.__init__(self,file_path,detection_type = detection_type)
         ClosedBaseClass.__init__(self,detection_type = detection_type)
@@ -43,6 +43,7 @@ class RKClosedEngine(ClosedBaseClass,DPBaseClass):
 
         self.sparsity_threshold = 0.1
 
+        self.interp_kind = interp_kind
         self.interaction_picture_calculations = True
 
         self.load_mu()
@@ -137,7 +138,8 @@ class RKClosedEngine(ClosedBaseClass,DPBaseClass):
         pnb = b.pulse_number
         pulse_number = max(pna,pnb)
         
-        ab = RK_perturbative_container(t,psi,pulse_number,manifold_key,pdc)
+        ab = RK_perturbative_container(t,psi,pulse_number,manifold_key,pdc,
+                                       interp_kind=self.interp_kind)
         ab.one_time_step_function = self.one_time_step_function
         return ab
 
@@ -445,7 +447,8 @@ energy singly-excited state should be set to 0
 
         psi_out = RK_perturbative_container(t,next_psi,pulse_number,
                                             new_manifold_key,output_pdc,
-                                            simultaneous=simultaneous)
+                                            simultaneous=simultaneous,
+                                            interp_kind=self.interp_kind)
         psi_out.one_time_step_function = self.one_time_step_function
     
         return psi_out

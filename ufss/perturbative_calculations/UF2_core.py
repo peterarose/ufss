@@ -26,7 +26,7 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
         initial_state (int): index of initial state for psi^0
 
 """
-    def __init__(self,file_path,*,initial_state=0,
+    def __init__(self,file_path,*,initial_state=0,interp_kind='linear',
                  detection_type = 'polarization'):
         UF2BaseClass.__init__(self,file_path,detection_type = detection_type)
         ClosedBaseClass.__init__(self,detection_type = detection_type)
@@ -45,6 +45,7 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
         self.efield_mask_time = 0
         self.method = 'UF2'
 
+        self.interp_kind = interp_kind
         self.initial_state = initial_state
 
         self.load_eigensystem()
@@ -151,7 +152,7 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
 
         if self.method == 'UF2':
             ab=perturbative_container(t,f,bool_mask,pulse_number,
-                                      manifold_key,pdc,t0)
+                                      manifold_key,pdc,t0,interp_kind=self.interp_kind)
         elif self.method == 'chebyshev':
             ab=cheb_perturbative_container(t,f,bool_mask,pulse_number,
                                            manifold_key,pdc,t0,dom=dom)
@@ -544,7 +545,7 @@ alias transitions onto nonzero electric field amplitudes.
         if self.method == 'UF2':
             psi_out = perturbative_container(t,psi,n_nonzero,pulse_number,
                                 new_manifold_key,output_pdc,pulse_time,
-                                simultaneous=simultaneous)
+                                simultaneous=simultaneous,interp_kind=self.interp_kind)
         elif self.method == 'chebyshev':
             psi_out = cheb_perturbative_container(t,psi,n_nonzero,
                                                   pulse_number,
