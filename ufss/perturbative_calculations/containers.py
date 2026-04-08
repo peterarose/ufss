@@ -1,6 +1,7 @@
 import numpy as np
 import numpy.polynomial.chebyshev as npch
 from scipy.interpolate import interp1d as sinterp1d
+from scipy.interpolate import PchipInterpolator
 
 class perturbative_container:
     """This class is used for storing wavefunctions and density matrices
@@ -25,6 +26,7 @@ class perturbative_container:
             t0 (float) : interaction picture time-zero value
         Keyword Args:
             interp_kind (str) : type of interpolation to use (e.g. linear, cubic, etc.)
+                can now also be pchip
             interp_left_fill (float) : value to use for extrapolation to earlier times
             simultaneous (int) : number of simultaneous pulse interactions (only 
                 relevant for impulsive calculations)
@@ -90,12 +92,32 @@ class perturbative_container:
 
     def make_interpolant(self,*, kind='cubic', left_fill=0):
         """Interpolates density matrix and pads using left_fill to the 
-            left and f[-1] to the right
+            left and f[-1] to the right if kind = 'pchip', uses Pchip
+            interpolation, which is a little slower, but allows for a 
+            much smoother interpolation. Use if interpolation artifacts
+            are encountered
 """
-        left_fill = np.ones(self.n,dtype='complex')*left_fill
-        right_fill = self.f[:,-1]
-        return sinterp1d(self.t,self.f,fill_value = (left_fill,right_fill),
+        if kind == 'pchip':
+            pchipr = PchipInterpolator(self.t,np.real(self.f),axis = 1,extrapolate=False)
+            pchipi = PchipInterpolator(self.t,np.imag(self.f),axis = 1,extrapolate=False)
+            print(kind)
+            def f(t):
+                tmin = self.t[0]
+                tmax = self.t[-1]
+                tchip_inds = np.where((t>=tmin) & (t<=tmax))[0]
+                t0_inds = np.where(t<tmin)[0]
+                t_asymptote_inds = np.where(t>tmax)[0]
+                ans = np.zeros((self.n,t.size),dtype='complex')
+                ans[:,t0_inds] = 0
+                ans[:,tchip_inds] = pchipr(t[tchip_inds]) + 1j *pchipi(t[tchip_inds])
+                ans[:,t_asymptote_inds] = self.asymptote[:,None]
+                return ans
+        else:
+            left_fill = np.ones(self.n,dtype='complex')*left_fill
+            right_fill = self.f[:,-1]
+            f = sinterp1d(self.t,self.f,fill_value = (left_fill,right_fill),
                          assume_sorted=True,bounds_error=False,kind=kind)
+        return f
 
     def impulsive_fun(self,asymptote,left_fill=0):
         if left_fill == 0:
@@ -384,12 +406,29 @@ class RK_perturbative_container:
         """Interpolates density matrix and pads using 0 to the left
             and f[-1] to the right
 """
-        left_fill = np.ones(self.n)*left_fill
-        right_fill = np.ones(self.n)*np.nan
-        fill_value = (left_fill,right_fill)
-        return sinterp1d(self.t,self.f, kind=kind,
+        if kind == 'pchip':
+            pchipr = PchipInterpolator(self.t,np.real(self.f),axis = 1,extrapolate=False)
+            pchipi = PchipInterpolator(self.t,np.imag(self.f),axis = 1,extrapolate=False)
+            print(kind)
+            def f(t):
+                tmin = self.t[0]
+                tmax = self.t[-1]
+                tchip_inds = np.where((t>=tmin) & (t<=tmax))[0]
+                t0_inds = np.where(t<tmin)[0]
+                t_asymptote_inds = np.where(t>tmax)[0]
+                ans = np.zeros((self.n,t.size),dtype='complex')
+                ans[:,t0_inds] = 0
+                ans[:,tchip_inds] = pchipr(t[tchip_inds]) + 1j *pchipi(t[tchip_inds])
+                ans[:,t_asymptote_inds] = self.asymptote[:,None]
+                return ans
+        else:
+            left_fill = np.ones(self.n)*left_fill
+            right_fill = np.ones(self.n)*np.nan
+            fill_value = (left_fill,right_fill)
+            f = sinterp1d(self.t,self.f, kind=kind,
                          fill_value = fill_value,
                          assume_sorted=True,bounds_error=False)
+        return f
 
     def one_time_step(self,f0,t0,tf,*,find_best_starting_time = True):
         if find_best_starting_time and tf < self.t_checkpoint[-1]:

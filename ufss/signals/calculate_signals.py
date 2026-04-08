@@ -687,30 +687,32 @@ class CalculateSignalsClosed(CalculateSignals):
     
 class UF2DensityMatrices(UF2OpenEngine,CalculateSignalsOpen):
     def __init__(self,file_path,*,detection_type='polarization',
-                 conserve_memory=False):
+                 conserve_memory=False,interp_kind='linear'):
         UF2OpenEngine.__init__(self,file_path,detection_type=detection_type,
-                           conserve_memory=conserve_memory)
+                           conserve_memory=conserve_memory,interp_kind=interp_kind)
         CalculateSignalsOpen.__init__(self,detection_type=detection_type)
 
 class RKDensityMatrices(RKOpenEngine,CalculateSignalsOpen):
     def __init__(self,file_path,*,detection_type='polarization',
-                 conserve_memory=False):
+                 conserve_memory=False,interp_kind='linear'):
         RKOpenEngine.__init__(self,file_path,detection_type=detection_type,
-                           conserve_memory=conserve_memory)
+                           conserve_memory=conserve_memory,interp_kind=interp_kind)
         CalculateSignalsOpen.__init__(self,detection_type=detection_type)
 
 class UF2Wavefunctions(UF2ClosedEngine,CalculateSignalsClosed):
     def __init__(self,file_path,*,detection_type='polarization',
-                conserve_memory=None):
-        UF2ClosedEngine.__init__(self,file_path,detection_type=detection_type)
+                conserve_memory=None,interp_kind='linear'):
+        UF2ClosedEngine.__init__(self,file_path,detection_type=detection_type,
+                                 interp_kind=interp_kind)
         CalculateSignalsClosed.__init__(self,detection_type=detection_type)
 
         self.add_lorentzian_linewidth = True
 
 class RKWavefunctions(RKClosedEngine,CalculateSignalsClosed):
     def __init__(self,file_path,*,detection_type='polarization',
-                conserve_memory=None):
-        RKClosedEngine.__init__(self,file_path,detection_type=detection_type)
+                conserve_memory=None,interp_kind='linear'):
+        RKClosedEngine.__init__(self,file_path,detection_type=detection_type,
+                                interp_kind=interp_kind)
         CalculateSignalsClosed.__init__(self,detection_type=detection_type)
 
         self.add_lorentzian_linewidth = True
@@ -718,7 +720,8 @@ class RKWavefunctions(RKClosedEngine,CalculateSignalsClosed):
 
 class SpectroscopyBase:
     def __init__(self,file_name,*,engine_name = 'UF2',include_linear=False,
-                 detection_type = 'polarization',conserve_memory=False):
+                 detection_type = 'polarization',conserve_memory=False,
+                 interp_kind='linear'):
         if file_name[-1] == '/':
             file_name = file_name[:-1]
         file_end = os.path.split(file_name)[-1]
@@ -734,7 +737,7 @@ class SpectroscopyBase:
             elif engine_name == 'RK':
                 engine = RKDensityMatrices
         self.calc = engine(file_name,conserve_memory = conserve_memory,
-                           detection_type=detection_type)
+                           detection_type=detection_type,interp_kind=interp_kind)
         self.engine = self.calc
         self.save_name = 'signals'
 

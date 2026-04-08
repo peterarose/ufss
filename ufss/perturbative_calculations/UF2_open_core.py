@@ -32,7 +32,7 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
 
 """
     def __init__(self,file_path,*,detection_type = 'polarization',
-                 conserve_memory=False):
+                 conserve_memory=False,interp_kind='linear'):
         UF2BaseClass.__init__(self,file_path,detection_type=detection_type)
         OpenBaseClass.__init__(self,detection_type = detection_type)
         self.slicing_time = 0
@@ -55,6 +55,7 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
 
         self.next_order_counter = 0
 
+        self.interp_kind = interp_kind
         self.method = 'UF2'
 
         self.check_for_zero_calculation = False
@@ -188,7 +189,8 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         rho = rho[bool_mask,:]
         
         if self.method == 'UF2':
-            rab=perturbative_container(t,rho,bool_mask,pulse_number,manifold_key,pdc,t0)
+            rab=perturbative_container(t,rho,bool_mask,pulse_number,manifold_key,pdc,t0,
+                                       interp_kind=self.interp_kind)
         elif self.method == 'chebyshev':
             rab=cheb_perturbative_container(t,rho,bool_mask,pulse_number,
                                            manifold_key,pdc,t0,dom=dom)
@@ -841,7 +843,7 @@ alias transitions onto nonzero electric field amplitudes.
         if self.method == 'UF2':
             rho_out = perturbative_container(t,rho,n_nonzero,pulse_number,
                                 new_manifold_key,output_pdc,pulse_time,
-                                simultaneous=simultaneous)
+                                simultaneous=simultaneous,interp_kind=self.interp_kind)
         
         elif self.method == 'chebyshev':
             rho_out = cheb_perturbative_container(t,rho,n_nonzero,pulse_number,

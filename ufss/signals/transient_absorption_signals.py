@@ -5,10 +5,11 @@ from ufss.signals import SpectroscopyBase
 
 class TransientAbsorption(SpectroscopyBase):
     def __init__(self,file_name,*,engine_name = 'UF2',include_linear=False,
-                 conserve_memory=False,detection_type='polarization'):
+                 conserve_memory=False,detection_type='polarization',
+                 interp_kind='linear'):
         super().__init__(file_name,engine_name=engine_name,
                          conserve_memory=conserve_memory,
-                         detection_type=detection_type)
+                         detection_type=detection_type,interp_kind=interp_kind)
 
         
         if include_linear:

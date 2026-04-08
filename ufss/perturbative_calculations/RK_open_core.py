@@ -26,7 +26,7 @@ class RKOpenEngine(OpenBaseClass,DPBaseClass):
 
 """
     def __init__(self,file_path,*,detection_type = 'polarization',
-                 conserve_memory=False,method='Euler'):
+                 conserve_memory=False,method='Euler',interp_kind='linear'):
         DPBaseClass.__init__(self,file_path,detection_type=detection_type)
         OpenBaseClass.__init__(self,detection_type = detection_type)
         self.slicing_time = 0
@@ -40,6 +40,7 @@ class RKOpenEngine(OpenBaseClass,DPBaseClass):
         self.diagram_generation_counter = 0
         self.convolution_time = 0
 
+        self.interp_kind = interp_kind
         self.interaction_picture_calculations = True
 
         self.sparsity_threshold = 0.1
@@ -146,7 +147,8 @@ class RKOpenEngine(OpenBaseClass,DPBaseClass):
         pnb = rb.pulse_number
         pulse_number = max(pna,pnb)
         
-        rab = RK_perturbative_container(t,rho,pulse_number,manifold_key,pdc)
+        rab = RK_perturbative_container(t,rho,pulse_number,manifold_key,pdc,
+                                        interp_kind=self.interp_kind)
         rab.one_time_step_function = self.one_time_step_function
         return rab
 
@@ -563,7 +565,8 @@ energy singly-excited state should be set to 0
 
         rho_out = RK_perturbative_container(t,next_rho,pulse_number,
                                             new_manifold_key,output_pdc,
-                                            simultaneous=simultaneous)
+                                            simultaneous=simultaneous,
+                                            interp_kind = self.interp_kind)
         rho_out.one_time_step_function = self.one_time_step_function
     
         return rho_out
