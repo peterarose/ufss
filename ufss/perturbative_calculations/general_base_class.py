@@ -99,12 +99,21 @@ class BaseClass:
         """Calculates the dft of the efields and saves the results as a list 
             to the attribute "efields_fts". Also calculates the associated 
             angular frequencies, and stores the results as a list to the
-            attribute "efield_omegas" """
+            attribute "efield_omegas". For methods 'chebyshev' and 'hermite'
+            the transform is computed spectrally (see _spectral_efield_ft), and
+            efield_omegas is a uniform grid rather than the FFT grid."""
         self.efield_omegas = []
         self.efield_fts = []
         for pulse_number in range(len(self.efields)):
-            dt = self.dts[pulse_number]
             efield_t = self.efield_times[pulse_number]
+            if self.method in ['chebyshev','hermite'] and efield_t.size > 1:
+                # pulse is defined on non-uniform Chebyshev/Gauss-Hermite
+                # nodes, so the FFT below does not apply
+                efield_w, efield_ft = self._spectral_efield_ft(pulse_number)
+                self.efield_omegas.append(efield_w)
+                self.efield_fts.append(efield_ft)
+                continue
+            dt = self.dts[pulse_number]
             efield_w = fftshift(fftfreq(efield_t.size,d=dt))*2*np.pi
             self.efield_omegas.append(efield_w)
             ifft_norm = dt*efield_t.size
@@ -142,6 +151,91 @@ class BaseClass:
         if plot_fields:
             self.plot_efield(pulse_number)
 
+    def _spectral_efield_ft(self,pulse_number,num_w = None):
+        """Fourier transform int E(t) exp(i w t) dt of a pulse defined on
+            Chebyshev (method 'chebyshev') or Gauss-Hermite (method 'hermite')
+            nodes. Those nodes are not uniformly spaced, so the FFT used in
+            set_dft_efields does not apply. Same sign and normalization
+            convention as fftshift(ifft(ifftshift(.)))*N*dt used there.
+
+        Args:
+            pulse_number (int) : which pulse to transform
+
+        Keyword Args:
+            num_w (int) : number of frequency points (default max(4*M,512))
+
+        Returns:
+            tuple : (w, efield_ft), both 1D np.ndarrays
+        """
+        efield_t = np.asarray(self.efield_times[pulse_number],dtype='float')
+        efield = np.asarray(self.efields[pulse_number],dtype='complex')
+        M = efield_t.size
+        # frequency window: roughly the "Nyquist" frequency of the average
+        # node spacing, which is the most the M-point representation can
+        # resolve
+        w_max = np.pi * (M-1) / (efield_t[-1] - efield_t[0])
+        if num_w is None:
+            num_w = max(4*M,512)
+        w = np.linspace(-w_max,w_max,num_w)
+
+        if self.method == 'hermite':
+            # E(t) = exp(-x**2) sum_n b_n h_n(x), x = (t-center)/scale, with
+            # h_n = H_n/sqrt(2**n n! sqrt(pi)). Using
+            #     int exp(-x**2) H_n(x) exp(i k x) dx = sqrt(pi) (i k)**n exp(-k**2/4)
+            # the transform is exact:
+            #     scale exp(i w center) pi**(1/4) exp(-k**2/4)
+            #         * sum_n b_n (i k/sqrt(2))**n / sqrt(n!),   k = w*scale
+            # Each term is formed in log space to avoid overflow at large n.
+            from scipy.special import gammaln
+            from ufss.perturbative_calculations.containers import HermitePoly
+            try:
+                center = self.herm_centers[pulse_number]
+                scale = self.herm_scales[pulse_number]
+            except (AttributeError,IndexError):
+                raise AttributeError("method 'hermite' requires herm_centers and herm_scales to be set (one entry per pulse) before calling set_efields")
+            b = HermitePoly(efield_t,efield,center = center,scale = scale).coefs[0]
+            n = np.arange(M)
+            k = w * scale
+            abs_k = np.abs(k)
+            with np.errstate(divide='ignore'):
+                log_k = np.log(abs_k/np.sqrt(2))
+            log_mag = (0.25*np.log(np.pi) - k[:,np.newaxis]**2/4
+                       + n[np.newaxis,:]*log_k[:,np.newaxis]
+                       - 0.5*gammaln(n+1)[np.newaxis,:])
+            log_mag[:,0] = 0.25*np.log(np.pi) - k**2/4 # n = 0 term (k**0 = 1)
+            phase = (1j*np.sign(k))[:,np.newaxis]**n[np.newaxis,:]
+            phase[:,0] = 1
+            terms = phase * np.exp(log_mag)
+            efield_ft = scale * np.exp(1j*w*center) * terms.dot(b)
+
+        elif self.method == 'chebyshev':
+            # Fit the Chebyshev interpolant on dom (pulse taken to be zero
+            # outside dom), resample it on enough first-kind Chebyshev nodes
+            # to resolve exp(i w t) across dom at the largest |w|, and
+            # integrate with Fejer's first rule
+            from ufss.perturbative_calculations.containers import ChebPoly
+            try:
+                dom = np.asarray(self.doms[pulse_number],dtype='float')
+            except (AttributeError,IndexError):
+                raise AttributeError("method 'chebyshev' requires doms to be set (one entry per pulse) before calling set_efields")
+            chp = ChebPoly(efield_t,efield[np.newaxis,:],dom = dom)
+            midpoint = (dom[0] + dom[1])/2
+            halfwidth = (dom[1] - dom[0])/2
+            N = M + int(np.ceil(w_max*halfwidth)) + 16
+            x = npch.chebpts1(N)
+            theta = np.arccos(x)
+            j = np.arange(1,N//2+1)
+            fejer = 2/N*(1 - 2*np.sum(np.cos(2*np.outer(theta,j))/(4*j**2-1),
+                                      axis=1))
+            t_quad = x*halfwidth + midpoint
+            weights = halfwidth * fejer * chp(t_quad)[0,:]
+            efield_ft = np.exp(1j*w[:,np.newaxis]*t_quad[np.newaxis,:]).dot(weights)
+
+        else:
+            raise ValueError('_spectral_efield_ft only applies to methods chebyshev and hermite')
+
+        return w, efield_ft
+
     def plot_efield(self,pulse_number):
         """Plots the specified pulse in both time and frequency domain
 
@@ -152,14 +246,17 @@ class BaseClass:
         efield = self.efields[pulse_number]
         efield_w = self.efield_omegas[pulse_number]
         efield_ft = self.efield_fts[pulse_number]
+        # mark the (non-uniform) nodes for chebyshev/hermite
+        time_marker = '.-' if self.method in ['chebyshev','hermite'] else '-'
         fig, axes = plt.subplots(1,2)
-        l1,l2, = axes[0].plot(efield_t,np.real(efield),efield_t,np.imag(efield))
+        l1,l2, = axes[0].plot(efield_t,np.real(efield),time_marker,
+                              efield_t,np.imag(efield),time_marker)
         plt.legend([l1,l2],['Real','Imag'])
         axes[1].plot(efield_w,np.real(efield_ft),efield_w,np.imag(efield_ft))
 
         axes[0].set_ylabel('Electric field Amp')
-        axes[0].set_xlabel('Time ($\omega_0^{-1})$')
-        axes[1].set_xlabel('Frequency ($\omega_0$)')
+        axes[0].set_xlabel('Time ($\\omega_0^{-1})$')
+        axes[1].set_xlabel('Frequency ($\\omega_0$)')
 
         fig.suptitle('Check that efield is well-resolved in time and frequency')
         plt.show()
