@@ -6,6 +6,7 @@ import time
 #Dependencies - numpy, scipy, matplotlib, pyfftw
 import numpy as np
 import numpy.polynomial.chebyshev as npch
+import numpy.polynomial.hermite as nphe
 from scipy.sparse import csr_matrix
 
 from ufss.perturbative_calculations import UF2BaseClass
@@ -13,6 +14,7 @@ from ufss.perturbative_calculations import perturbative_container
 from ufss.perturbative_calculations import OpenBaseClass
 
 from ufss.perturbative_calculations import ChebPoly, cheb_perturbative_container
+from ufss.perturbative_calculations import HermitePoly, hermite_perturbative_container
 
 class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
     """This class is designed to calculate perturbative wavepackets in the
@@ -63,6 +65,14 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         self.interaction_picture_calculations = True
 
         self.sparsity_threshold = .1
+
+        # Cache of exp(sign * lambda * tau) on each time grid tau (see eig_exp).
+        # Largest cached array, in complex elements (default ~ 160 MB); larger
+        # grids (e.g. long detection grids of big systems) are computed directly.
+        self.exp_cache_max_elements = int(1E7)
+        self.exp_cache_max_total = int(4E7)
+        self._eig_exp_cache = {}
+        self._eig_exp_cache_size = 0
 
         self.conserve_memory = conserve_memory
 
@@ -135,8 +145,17 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
             if ra.manifold_key != rb.manifold_key:
                 raise Exception('Cannot add perturbative_container objects that exist in different manifolds')
             
+        if self.method == 'hermite' and ra.impulsive != rb.impulsive:
+            raise ValueError("method='hermite' cannot add a density matrix whose "
+                             "most recent interaction was with an impulsive "
+                             "pulse to one whose most recent interaction was "
+                             "with a finite pulse")
+
         if ra.impulsive:
             return self.add_impulsive_rhos(ra,rb)
+
+        if self.method == 'hermite':
+            return self.add_hermite_rhos(ra,rb)
         
         manifold_key = ra.manifold_key
         
@@ -196,6 +215,41 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
                                            manifold_key,pdc,t0,dom=dom)
         return rab
 
+    def add_hermite_rhos(self,ra,rb):
+        """Exact sum of two hermite_perturbative_container objects, which
+            may come from pulses with different arrival times (t0) and
+            node sets: each closed-form term keeps its own center/scale, and
+            the interaction-picture shift exp(e*(t0 - t0_a)) is a constant
+            per-species factor folded into the coefficients. Mirrors the
+            generic add_rhos above, but with no resampling.
+"""
+        if ra.t0 > rb.t0:
+            t0 = ra.t0
+            pulse_number = ra.pulse_number
+        else:
+            t0 = rb.t0
+            pulse_number = rb.pulse_number
+
+        try:
+            eva = self.eigenvalues['all_manifolds'][ra.bool_mask]
+            evb = self.eigenvalues['all_manifolds'][rb.bool_mask]
+        except KeyError:
+            eva = self.eigenvalues[ra.manifold_key][ra.bool_mask]
+            evb = self.eigenvalues[rb.manifold_key][rb.bool_mask]
+
+        if self.interaction_picture_shift:
+            factor_a = np.exp(eva*(t0 - ra.t0))
+            factor_b = np.exp(evb*(t0 - rb.t0))
+        else:
+            factor_a = np.ones(eva.size,dtype='complex')
+            factor_b = np.ones(evb.size,dtype='complex')
+
+        bool_mask = np.logical_or(ra.bool_mask,rb.bool_mask)
+        return hermite_perturbative_container.combine(ra,rb,factor_a,factor_b,
+                                                      bool_mask,pulse_number,
+                                                      ra.manifold_key,ra.pdc,
+                                                      t0)
+
     def set_efields(self,times_list,efields_list,centers_list,
                     phase_discrimination,*,reset_calculations = True,
                     plot_fields = False):
@@ -240,6 +294,51 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         save_dict = {'UF2_calculation_time':self.calculation_time}
         np.savez(os.path.join(self.base_path,'UF2_calculation_time.npz'),**save_dict)
 
+    def eig_exp(self,ev_key,sign,t_exp,mask):
+        """Returns exp(sign * e[mask,None] * t_exp[None,:]) for the Liouvillian
+            eigenvalues e = self.eigenvalues[ev_key], with the same exp_cutoff
+            clamping as the direct calculation.
+
+            Uses exp(s e t) = exp(s e (t - t[0])) * exp(s e t[0]). The first
+            factor depends only on the shape of the time grid -- not on pulse
+            delays or which pulse the density matrix came from -- so it is
+            computed once per grid for all eigenvalues and cached; each call
+            then costs one row slice and one multiplication instead of an exp
+            of the whole (states x times) array.
+"""
+        e_full = self.eigenvalues[ev_key]
+        spectral = self.method == 'chebyshev' or self.method == 'hermite'
+        t_exp = np.asarray(t_exp,dtype='float')
+        base = t_exp - t_exp[0]
+        shift = t_exp[0]
+        key = (ev_key,sign,self.method,base.tobytes())
+        entry = self._eig_exp_cache.get(key)
+        if entry is None and e_full.size * base.size <= self.exp_cache_max_elements:
+            arg = sign * e_full[:,np.newaxis] * base[np.newaxis,:]
+            entry = (np.exp(arg), np.max(np.real(arg),axis=1))
+            new_size = e_full.size * base.size
+            if self._eig_exp_cache_size + new_size > self.exp_cache_max_total:
+                self._eig_exp_cache = {}
+                self._eig_exp_cache_size = 0
+            self._eig_exp_cache[key] = entry
+            self._eig_exp_cache_size += new_size
+
+        e = e_full[mask]
+        shift_arg = sign * e * shift
+        if entry is not None:
+            exp_base, base_max = entry
+            # the direct calculation clamps any argument whose real part
+            # exceeds exp_cutoff; if that could happen, do it the direct way
+            if not (spectral and np.any(base_max[mask] + np.real(shift_arg)
+                                        > self.exp_cutoff)):
+                return exp_base[mask,:] * np.exp(shift_arg)[:,np.newaxis]
+
+        arg = sign * e[:,np.newaxis] * t_exp[np.newaxis,:]
+        if spectral:
+            exp_inds = np.where(np.real(arg) > self.exp_cutoff)
+            arg[exp_inds] = -self.exp_cutoff
+        return np.exp(arg)
+
     def get_rho(self,t,rho_obj,*,reshape=True,original_L_basis=True):
         manifold_key = rho_obj.manifold_key
         mask = rho_obj.bool_mask
@@ -248,21 +347,14 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         else:
             t_exp = t
         
-        try:
-            e = self.eigenvalues['all_manifolds'][mask]
-            ev = self.eigenvectors['all_manifolds'][:,mask]
-            ket_size, bra_size = self.rho_shapes['all_manifolds']
-        except KeyError:
-            e = self.eigenvalues[manifold_key][mask]
-            ev = self.eigenvectors[manifold_key][:,mask]
-            ket_size, bra_size = self.rho_shapes[manifold_key]
+        if 'all_manifolds' in self.eigenvalues:
+            ev_key = 'all_manifolds'
+        else:
+            ev_key = manifold_key
+        ev = self.eigenvectors[ev_key][:,mask]
+        ket_size, bra_size = self.rho_shapes[ev_key]
 
-        exp_arg = e[:,np.newaxis]*t_exp[np.newaxis,:]
-        if self.method == 'chebyshev':
-            exp_inds = np.where(np.real(exp_arg) > self.exp_cutoff)
-            exp_arg[exp_inds] = -self.exp_cutoff
-
-        rho = rho_obj(t)*np.exp(exp_arg)
+        rho = rho_obj(t)*self.eig_exp(ev_key,1,t_exp,mask)
         if original_L_basis:
             new_rho = ev.dot(rho)
         else:
@@ -310,6 +402,12 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
                                                     key,pdc,t0,
                                                     interp_left_fill=1,
                                                     dom = self.doms[0])
+        elif self.method == 'hermite':
+            self.rho0 = hermite_perturbative_container(t,rho0,bool_mask,None,
+                                                       key,pdc,t0,
+                                                       interp_left_fill=1,
+                                                       center = self.herm_centers[0],
+                                                       scale = self.herm_scales[0])
 
     def set_rho0_manual_L_eigenbasis(self,manifold_key,bool_mask,weights):
         """
@@ -632,9 +730,11 @@ alias transitions onto nonzero electric field amplitudes.
             rho =self.get_rho(t,rho_in,reshape=True,original_L_basis=True)
 
             if ket_flag:
-                rho = np.einsum('ij,jkl',mu,rho)
+                # mu . rho  (== einsum('ij,jkl'); tensordot uses BLAS)
+                rho = np.tensordot(mu,rho,axes=(1,0))
             else:
-                rho = np.einsum('ijl,jk',rho,mu)
+                # rho . mu  (== einsum('ijl,jk'))
+                rho = np.tensordot(rho,mu,axes=(1,0)).transpose(0,2,1)
             
             rho = self.rho_matrix_to_L_vector(rho,new_manifold_key)
             
@@ -680,9 +780,11 @@ alias transitions onto nonzero electric field amplitudes.
             rho =self.get_rho(t,rho_in,reshape=True,original_L_basis=True)
 
             if ket_flag:
-                exp_val = np.einsum('ij,jil',mu,rho)
+                # Tr(mu rho)  (== einsum('ij,jil'))
+                exp_val = np.tensordot(mu,rho,axes=([0,1],[1,0]))
             else:
-                exp_val = np.einsum('ijl,ji',rho,mu)
+                # Tr(rho mu)  (== einsum('ijl,ji'))
+                exp_val = np.tensordot(rho,mu,axes=([0,1],[1,0]))
             
         else:
             rho =self.get_rho(t,rho_in,reshape=False,original_L_basis=False)
@@ -783,28 +885,23 @@ alias transitions onto nonzero electric field amplitudes.
         rho = rho * efield[np.newaxis,:]
 
         ### UF2 specific
-        try:
-            ev2 = self.eigenvalues['all_manifolds']
-        except KeyError:
-            ev2 = self.eigenvalues[new_manifold_key]
+        if 'all_manifolds' in self.eigenvalues:
+            ev_key2 = 'all_manifolds'
+        else:
+            ev_key2 = new_manifold_key
 
         if self.interaction_picture_shift:
             t_exp_2 = t - pulse_time
         else:
             t_exp_2 = t
 
-        exp_factor2_arg = -ev2[n_nonzero,np.newaxis] * t_exp_2[np.newaxis,:]
-        if self.method == 'chebyshev':
-            exp_inds = np.where(np.real(exp_factor2_arg) > self.exp_cutoff)
-            exp_factor2_arg[exp_inds] = -self.exp_cutoff
-        exp_factor2 = np.exp(exp_factor2_arg)
+        exp_factor2 = self.eig_exp(ev_key2,-1,t_exp_2,n_nonzero)
         
         if self.interaction_picture_calculations:
             rho = rho * exp_factor2
         else:
             t_exp_2b = t_exp_2 - t_exp_2[0]
-            exp_factor2b_arg = ev2[n_nonzero,np.newaxis] * t_exp_2b[np.newaxis,:]
-            exp_factor2b = np.exp(exp_factor2b_arg)
+            exp_factor2b = self.eig_exp(ev_key2,1,t_exp_2b,n_nonzero)
             # print('Possible problem with non-interaction picture calculations')
 
         t0 = time.time()
@@ -816,6 +913,9 @@ alias transitions onto nonzero electric field amplitudes.
         if M == 1:
             if self.method == 'chebyshev':
                 dom = self.doms[pulse_number] + pulse_time
+            elif self.method == 'hermite':
+                center = self.herm_centers[pulse_number] + pulse_time
+                scale = self.herm_scales[pulse_number]
             else:
                 pass
         else:
@@ -832,6 +932,16 @@ alias transitions onto nonzero electric field amplitudes.
                     chp = ChebPoly(t,rho * exp_factor2,dom = dom)
                 chp.integrate()
                 rho = chp(t)
+            elif self.method == 'hermite':
+                center = self.herm_centers[pulse_number] + pulse_time
+                scale = self.herm_scales[pulse_number]
+                if self.interaction_picture_calculations:
+                    hp = HermitePoly(t,rho,center = center,scale = scale)
+                else:
+                    hp = HermitePoly(t,rho * exp_factor2,center = center,scale = scale)
+                hp.integrate()
+                # the container keeps hp's closed form directly (below);
+                # no need to sample it at t
 
         if not self.interaction_picture_calculations:
             if self.method == 'UF2':
@@ -849,6 +959,16 @@ alias transitions onto nonzero electric field amplitudes.
             rho_out = cheb_perturbative_container(t,rho,n_nonzero,pulse_number,
                                 new_manifold_key,output_pdc,pulse_time,
                                 simultaneous=simultaneous,dom = dom)
+        elif self.method == 'hermite':
+            if M == 1:
+                rho_out = hermite_perturbative_container(t,rho,n_nonzero,pulse_number,
+                                    new_manifold_key,output_pdc,pulse_time,
+                                    simultaneous=simultaneous)
+            else:
+                rho_out = hermite_perturbative_container.from_hermite_poly(hp,
+                                    n_nonzero,pulse_number,new_manifold_key,
+                                    output_pdc,pulse_time,
+                                    simultaneous=simultaneous)
 
         self.next_order_counter += 1
         self.next_order_time += time.time() - tnext_order0

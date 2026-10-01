@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import numpy.polynomial.chebyshev as npch
+import numpy.polynomial.hermite as nphe
 try:
     from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
     from ufss.perturbative_calculations.heaviside_convolve_pyfftw import HeavisideConvolve, HeavisideConvolveSP
@@ -204,6 +205,17 @@ class BaseClass:
         ef = np.array([1])
         efields = [ef] * L
 
+        # placeholders: every pulse here is impulsive (t.size==1), so
+        # center/scale (like dom, for chebyshev) are never actually used to
+        # fit anything -- they just need to exist so that container
+        # constructors downstream (e.g. set_psi0, next_order) don't raise
+        # an IndexError/AttributeError when self.method == 'hermite'
+        if self.method == 'hermite':
+            self.herm_centers = [0.0] * L
+            self.herm_scales = [1.0] * L
+        elif self.method == 'chebyshev':
+            self.doms = [np.array([-1.0,1.0])] * L
+
         self.set_efields(times,efields,centers,phase_discrimination,
                          reset_calculations = True,plot_fields = False)
         
@@ -228,6 +240,18 @@ class BaseClass:
             efield_t = npch.chebpts1(M) * Delta/2 * sigma_t
             dom = np.array([-Delta/2*sigma_t,Delta/2*sigma_t])
             self.doms = [dom] * L
+        elif self.method == 'hermite':
+            # scale is tied directly to sigma_t (not Delta): a Gaussian
+            # pulse exp(-t**2/(2*sigma_t**2)) is *exactly* exp(-x**2) with
+            # x = t/(sigma_t*sqrt(2)), so this choice represents the pulse
+            # itself with a single (degree-0) Hermite mode regardless of M.
+            # Delta doesn't constrain the node range the way it does for
+            # Chebyshev -- Gauss-Hermite nodes of order M already span
+            # roughly +/- scale*sqrt(2*M), growing with M automatically.
+            scale = sigma_t * np.sqrt(2)
+            efield_t = nphe.hermgauss(M)[0] * scale
+            self.herm_centers = [0.0] * L
+            self.herm_scales = [scale] * L
         else:
             efield_t = np.linspace(-Delta/2,Delta/2,num=M)*sigma_t
             

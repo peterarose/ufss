@@ -7,12 +7,14 @@ import time
 #Dependencies - numpy, scipy, matplotlib
 import numpy as np
 import numpy.polynomial.chebyshev as npch
+import numpy.polynomial.hermite as nphe
 
 from ufss import CompositeDiagrams
 from ufss.perturbative_calculations import UF2BaseClass
 from ufss.perturbative_calculations import ClosedBaseClass
 from ufss.perturbative_calculations import perturbative_container
 from ufss.perturbative_calculations import ChebPoly, cheb_perturbative_container
+from ufss.perturbative_calculations import HermitePoly, hermite_perturbative_container
 
 class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
     """This class is designed to calculate perturbative wavepackets in the
@@ -97,8 +99,30 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
             if a.manifold_key != b.manifold_key:
                 raise Exception('Cannot add rho_container objects that exist in different manifolds')
             
+        if self.method == 'hermite' and a.impulsive != b.impulsive:
+            raise ValueError("method='hermite' cannot add a wavefunction whose "
+                             "most recent interaction was with an impulsive "
+                             "pulse to one whose most recent interaction was "
+                             "with a finite pulse")
+
         if a.impulsive:
             return self.add_impulsive_psis(a,b)
+
+        if self.method == 'hermite':
+            # exact sum: each closed-form term keeps its own center/scale,
+            # so different arrival times need no resampling (the closed
+            # engine applies no interaction-picture shift, see below)
+            if a.t0 > b.t0:
+                t0, pulse_number = a.t0, a.pulse_number
+            else:
+                t0, pulse_number = b.t0, b.pulse_number
+            bool_mask = np.logical_or(a.bool_mask,b.bool_mask)
+            return hermite_perturbative_container.combine(a,b,np.ones(a.n),
+                                                          np.ones(b.n),
+                                                          bool_mask,
+                                                          pulse_number,
+                                                          a.manifold_key,
+                                                          a.pdc,t0)
         
         manifold_key = a.manifold_key
         
@@ -117,7 +141,7 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
             halfwidth = (dom[1] - dom[0])/2
             order = max(a.order,b.order)
             t = npch.chebpts1(order) * halfwidth + midpoint
-            
+
         f = np.zeros((a.bool_mask.size,t.size),dtype='complex')
         f_a = a(t)
         f_b = b(t)
@@ -253,6 +277,12 @@ class UF2ClosedEngine(ClosedBaseClass,UF2BaseClass):
                                                     key,pdc,t0,
                                                     interp_left_fill=1,
                                                     dom = self.doms[0])
+        elif self.method == 'hermite':
+            self.psi0 = hermite_perturbative_container(t,psi0,bool_mask,None,
+                                                       key,pdc,t0,
+                                                       interp_left_fill=1,
+                                                       center = self.herm_centers[0],
+                                                       scale = self.herm_scales[0])
 
     def load_eigensystem(self):
         """Load in known eigenvalues. Must be stored as a numpy archive file,
@@ -528,6 +558,13 @@ alias transitions onto nonzero electric field amplitudes.
 
         convolve_fun = self.heaviside_convolve_list[pulse_number].fft_convolve2
 
+        # computed unconditionally (not just in the M != 1 branch below) so
+        # that the container-construction code further down always has a
+        # valid center/scale, even for impulsive (M==1) pulses
+        if self.method == 'hermite':
+            center = self.herm_centers[pulse_number] + pulse_time
+            scale = self.herm_scales[pulse_number]
+
         if M == 1:
             pass
         else:
@@ -538,6 +575,10 @@ alias transitions onto nonzero electric field amplitudes.
                 chp = ChebPoly(t,psi,dom = dom)
                 chp.integrate()
                 psi = chp(t)
+            elif self.method == 'hermite':
+                hp = HermitePoly(t,psi,center = center,scale = scale)
+                hp.integrate()
+                # the container keeps hp's closed form directly (below)
 
         t1 = time.time()
         self.convolution_time += t1-t0
@@ -553,6 +594,20 @@ alias transitions onto nonzero electric field amplitudes.
                                                   output_pdc,pulse_time,
                                                   simultaneous=simultaneous,
                                                   dom = dom)
+        elif self.method == 'hermite':
+            if M == 1:
+                psi_out = hermite_perturbative_container(t,psi,n_nonzero,
+                                                         pulse_number,
+                                                         new_manifold_key,
+                                                         output_pdc,pulse_time,
+                                                         simultaneous=simultaneous)
+            else:
+                psi_out = hermite_perturbative_container.from_hermite_poly(hp,
+                                                         n_nonzero,
+                                                         pulse_number,
+                                                         new_manifold_key,
+                                                         output_pdc,pulse_time,
+                                                         simultaneous=simultaneous)
 
         self.next_order_time += time.time() - t_next_order0
     

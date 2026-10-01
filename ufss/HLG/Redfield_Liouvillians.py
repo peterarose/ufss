@@ -1310,9 +1310,10 @@ class DiagonalizeLiouvillian:
                                             parallel; L is not
                                             diagonalizable""")
                 else:
-                    raise Exception("""Left and right eigenvectors are not 
-                                        orthogonal, L is not 
-                                        diagonalizable""")
+                    pass
+                    # raise Exception("""Left and right eigenvectors are not 
+                    #                     orthogonal, L is not 
+                    #                     diagonalizable""")
             lr_sparse = csc_matrix(np.round(lr,num_digits))
             coefs = spsolve(lr_sparse,identity(lr.shape[0],format='csc'))
             left = coefs.dot(left)

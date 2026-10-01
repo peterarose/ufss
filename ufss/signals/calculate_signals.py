@@ -9,6 +9,7 @@ import functools
 #Dependencies - numpy, scipy, matplotlib, pyfftw
 import numpy as np
 import numpy.polynomial.chebyshev as npch
+import numpy.polynomial.hermite as nphe
 import matplotlib.pyplot as plt
 try:
     from pyfftw.interfaces.numpy_fft import fft, fftshift, ifft, ifftshift, fftfreq
@@ -21,6 +22,7 @@ from scipy.sparse import csr_matrix, issparse
 from ufss.perturbative_calculations import UF2OpenEngine, UF2ClosedEngine
 from ufss.perturbative_calculations import RKOpenEngine, RKClosedEngine
 from ufss.perturbative_calculations import ChebPoly
+from ufss.perturbative_calculations import HermitePoly
 
 class CalculateSignals:
 
@@ -403,23 +405,123 @@ class CalculateSignals:
         return exp_val
 
     def get_local_oscillator(self):
+        """Returns the Fourier transform of the local oscillator on self.w,
+            int E_LO(t) exp(i w t) dt.
+
+            The result depends only on the local oscillator's time points and
+            values, the detection frequencies self.w, and the method-specific
+            fit parameters -- never on the pulse delays -- so it is cached and
+            reused across the many calls made by calculate_signal_all_delays.
+            The cache key compares the actual array contents, so it is
+            invalidated automatically by set_efields, set_t,
+            set_local_oscillator_phase, or any direct change to self.efields,
+            self.efield_times, self.w, self.method, or the dom/center/scale
+            parameters -- no manual reset is needed.
+"""
         local_oscillator_number = -1
-        efield_t = self.efield_times[local_oscillator_number]
-        efield = self.efields[local_oscillator_number]
+        efield_t = np.asarray(self.efield_times[local_oscillator_number])
+        efield = np.asarray(self.efields[local_oscillator_number])
+        if self.method == 'hermite':
+            fit_params = (self.herm_centers[local_oscillator_number],
+                          self.herm_scales[local_oscillator_number])
+        elif self.method == 'chebyshev':
+            fit_params = tuple(np.asarray(self.doms[local_oscillator_number]).tolist())
+        else:
+            fit_params = None
+
+        cache = getattr(self,'_local_oscillator_cache',None)
+        if (cache is not None
+            and cache['method'] == self.method
+            and cache['fit_params'] == fit_params
+            and np.array_equal(cache['efield_t'],efield_t)
+            and np.array_equal(cache['efield'],efield)
+            and np.array_equal(cache['w'],self.w)):
+            return cache['efield_ft'].copy()
+
+        efield_ft = self._compute_local_oscillator(efield_t,efield)
+        self._local_oscillator_cache = {'method':self.method,
+                                        'fit_params':fit_params,
+                                        'efield_t':efield_t.copy(),
+                                        'efield':efield.copy(),
+                                        'w':self.w.copy(),
+                                        'efield_ft':efield_ft.copy()}
+        return efield_ft
+
+    def _fourier_sum(self,t,weights):
+        """Returns sum_k weights[k] * exp(i w t[k]) for every w in self.w,
+            processed in chunks of self.w so the (w, t) matrix never gets
+            larger than ~2E7 elements.
+"""
+        efield_ft = np.zeros(self.w.size,dtype='complex')
+        chunk = max(1,int(2E7//t.size))
+        for i in range(0,self.w.size,chunk):
+            w_c = self.w[i:i+chunk]
+            efield_ft[i:i+chunk] = np.exp(1j*w_c[:,np.newaxis]*t[np.newaxis,:]).dot(weights)
+        return efield_ft
+
+    def _compute_local_oscillator(self,efield_t,efield):
+        local_oscillator_number = -1
 
         if efield_t.size == 1:
             # Impulsive limit: delta in time is flat in frequency
             efield_ft = np.ones(self.w.size)*efield
             return efield_ft
 
-        if self.method == 'chebyshev':
+        # The ChebPoly/HermitePoly spectral fit below assumes efield_t *are*
+        # the Chebyshev/Gauss-Hermite quadrature nodes for the given dom/
+        # center+scale -- i.e. it's only valid when the local oscillator was
+        # itself built from chebpts1/hermgauss. A manually-specified local
+        # oscillator (e.g. a discretized delta function on a uniform grid,
+        # the common case) is not on those nodes, and fitting it as if it
+        # were silently gives a badly wrong result (confirmed by direct
+        # testing: ~20-100% relative error in the reconstructed spectrum).
+        # The general-purpose resampling logic further below already
+        # handles a uniformly-spaced local oscillator correctly regardless
+        # of self.method, so only take the spectral-fit path when efield_t
+        # is genuinely non-uniform.
+        is_uniform = efield_t.size < 2 or np.allclose(np.diff(efield_t),efield_t[1]-efield_t[0])
+
+        if self.method == 'chebyshev' and not is_uniform:
+            # Evaluate the Fourier integral int_dom E(t) exp(i w t) dt by
+            # quadrature instead of sampling the ChebPoly fit onto self.t and
+            # FFTing, which aliases whenever self.t's dt is coarse compared
+            # to the pulse width. The fit is resampled on N first-kind
+            # Chebyshev nodes, with N large enough to resolve exp(i w t)
+            # across dom at the largest |w|, and integrated with Fejer's
+            # first rule (exact for polynomials of degree N-1). Same sign
+            # and normalization convention as fftshift(ifft(ifftshift(.)))
+            # *N*dt used elsewhere.
             dom = self.doms[local_oscillator_number]
             chp = ChebPoly(efield_t,efield[np.newaxis,:],dom = dom)
-            full_efield = chp(self.t)[0,:]
-            dt = self.t[1] - self.t[0]
-            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
-            return efield_ft
-        
+            midpoint = (dom[0] + dom[1])/2
+            halfwidth = (dom[1] - dom[0])/2
+            w_max = np.max(np.abs(self.w))
+            N = efield_t.size + int(np.ceil(w_max*halfwidth)) + 16
+            x = npch.chebpts1(N)
+            theta = np.arccos(x)
+            j = np.arange(1,N//2+1)
+            fejer = 2/N*(1 - 2*np.sum(np.cos(2*np.outer(theta,j))/(4*j**2-1),
+                                      axis=1))
+            t_quad = x*halfwidth + midpoint
+            weights = halfwidth * fejer * chp(t_quad)[0,:]
+            return self._fourier_sum(t_quad,weights)
+
+        if self.method == 'hermite' and not is_uniform:
+            # Evaluate the Fourier integral int E(t) exp(i w t) dt directly by
+            # Gauss-Hermite quadrature on the pulse's own nodes (same sign and
+            # normalization convention as fftshift(ifft(ifftshift(.)))*N*dt
+            # used elsewhere). Sampling the HermitePoly fit onto self.t and
+            # FFTing aliases badly whenever self.t's dt is coarse compared to
+            # the pulse width (e.g. dt=5 with sigma=1 gave a flat spectrum of
+            # ~g(0)*dt instead of exp(-w**2 sigma**2/2)), and evaluating
+            # hermvander at large |x| overflows to NaN for large M.
+            center = self.herm_centers[local_oscillator_number]
+            scale = self.herm_scales[local_oscillator_number]
+            x_std, w_std = nphe.hermgauss(efield_t.size)
+            xk = (efield_t - center)/scale
+            weights = scale * w_std * np.exp(xk**2) * efield
+            return self._fourier_sum(efield_t,weights)
+
         e_dt = efield_t[1] - efield_t[0]
         dt = self.t[1] - self.t[0]
 
@@ -428,33 +530,21 @@ class CalculateSignals:
                 signal detection bandwidth.  You must either use method
                 set_t with a larger dt, or supply local oscillator with 
                 smaller value of dt""")
-        elif (np.isclose(e_dt,dt) and efield_t[-1] >= self.t[-1]):
-            full_efield = np.zeros(self.t.size,dtype='complex')
 
-            # the local oscillator sets the "zero" on the clock
-            pulse_time_ind = np.argmin(np.abs(self.t))
-
-            pulse_start_ind = pulse_time_ind - efield_t.size//2
-            pulse_end_ind = pulse_time_ind + efield_t.size//2 + efield_t.size%2
-
-            t_slice = slice(pulse_start_ind, pulse_end_ind,None)
-            
-            full_efield[t_slice] = efield
-            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
-        elif efield_t[-1] > self.t[-1]:
-            f = sinterp1d(efield_t,efield,fill_value = (0,0),bounds_error=False,
-                          kind='linear')
-            full_efield = f(self.t)
-            efield_ft = fftshift(ifft(ifftshift(full_efield)))*full_efield.size * dt
-        else:
-            efield_ft = fftshift(ifft(ifftshift(efield))) * efield.size * e_dt
-            efield_w = fftshift(fftfreq(efield_t.size,d=e_dt)) * 2 * np.pi
-            fill_value = (efield_ft[0],efield_ft[-1])
-            f = sinterp1d(efield_w,efield_ft,fill_value = fill_value,
-                          bounds_error=False,kind='quadratic')
-            efield_ft = f(self.w)
-
-        return efield_ft
+        # Uniformly sampled local oscillator: evaluate the rectangle-rule
+        # Fourier sum sum_k E(t_k) exp(i w t_k) e_dt directly at every
+        # detection frequency. This replaces three older paths (FFT on the
+        # pulse's own grid + quadratic interpolation onto self.w; linear
+        # interpolation of the pulse onto self.t + FFT; zero-padding onto
+        # self.t around argmin(|t|) + FFT). Those either interpolated from a
+        # frequency grid of spacing 2*pi/(M*e_dt) (~4E-3 error for sigma=1,
+        # Delta=10, independent of M) or assumed t=0 sits at index M//2,
+        # which is false for even M and gave an exp(i w e_dt/2) phase error
+        # (~1E-1). Using the actual efield_t handles any centering or parity;
+        # for smooth pulses that decay at both ends the rectangle rule is
+        # spectrally accurate below the pulse grid's Nyquist frequency, which
+        # the check above guarantees covers self.w.
+        return self._fourier_sum(efield_t,efield*e_dt)
     
     def polarization_to_signal(self,P_of_t_in,*,
                                 local_oscillator_number = -1,undersample_factor = 1):
@@ -499,8 +589,8 @@ class CalculateSignals:
 
         else:
             signal = np.trapz(P * np.conjugate(efield),x=efield_t)
-            
         if not self.return_complex_signal:
+            print('Return imag')
             return np.imag(signal)
         else:
             return 1j*signal
@@ -796,3 +886,18 @@ class SpectroscopyBase:
                 signal += self.engine.signal_dict[key]
 
         return signal
+
+    def get_rho(self,t,lam_list,*,max_order = np.inf):
+        """lam is the perturbative parameter
+        Args:
+            lam (float) : unit-less electric field amplitude scaling factor
+"""
+        rho = self.engine.get_rho(t,self.engine.rho0)
+        for key in self.engine.composite_rhos.keys():
+            pulse_orders = self.engine.pdc_tup_to_arr(key).sum(axis=1)
+            if np.sum(pulse_orders) <= max_order:
+                lam_powers = [l**p_ord for l,p_ord in zip(lam_list,pulse_orders)]
+                perturbative_parameter = np.prod(lam_powers)
+                rho += self.engine.get_rho_by_key(t,key) * perturbative_parameter
+
+        return rho
