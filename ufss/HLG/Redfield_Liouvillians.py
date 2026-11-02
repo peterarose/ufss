@@ -7,6 +7,7 @@ import itertools
 from scipy.linalg import block_diag, eig, expm, eigh
 import scipy.sparse as sp
 from scipy.special import binom
+from scipy.sparse.csgraph import connected_components
 import yaml
 import copy
 import warnings
@@ -877,362 +878,290 @@ class RedfieldConstructor:
 
 
 
+def spectral_density_matrix(SD,w):
+    """Evaluates a spectral density on an array of frequencies, with the same
+        treatment of w = 0 as the scalar call SD(w) that the Redfield
+        constructors use element by element.
+    Args:
+        SD (callable): OhmicSpectralDensity, WhiteNoiseSpectralDensity or any
+            callable taking a scalar frequency
+        w (np.ndarray): frequencies (any shape)
+    Returns:
+        np.ndarray: SD(w) with the shape of w
+"""
+    w = np.asarray(w,dtype='float')
+    flat = w.ravel()
+    if isinstance(SD,OhmicSpectralDensity):
+        out = np.empty(flat.size)
+        zero = flat == 0
+        out[zero] = SD.J(np.zeros(np.count_nonzero(zero))) * SD.kT
+        nz = ~zero
+        out[nz] = SD.J(flat[nz]) * SD.temp_dist(flat[nz])
+    elif isinstance(SD,WhiteNoiseSpectralDensity):
+        out = SD.C_vec(flat)
+    else:
+        out = np.array([SD(x) for x in flat],dtype='float')
+    return out.reshape(w.shape)
+
 class SecularRedfieldConstructor(RedfieldConstructor):
+    """Secular Redfield theory that keeps every term coupling two density-matrix
+        elements of matching Bohr frequency.
 
-    def make_dissipation_tensor(self,CO,manifold_key,SD):
-        """Make a Redfield-style dissipation tensor using the eigenbasis
-            decomposition of the system-bath coupling operator (CO)
-        Args:
-            CO (np.ndarray): system-bath coupling operator
-            manifold_key (str): string representing the manifold
-            SD (callable): spectral density function of the bath
-        Returns:
-            np.ndarray: dissipation tensor, from which R may be made
+        A term R_pq, coupling rho_q = rho_kl to rho_p = rho_ij, is kept when
+        the Bohr frequencies w_ij = e_i - e_j and w_kl = e_k - e_l
+            (a) agree to within secular_tolerance (exact matches: populations,
+                degenerate eigenstates, equally spaced ladders), or
+            (b) differ by less than secular_cutoff times the size of the coupling
+            between the two frequency classes (the Frobenius norm of the block
+            of R connecting all elements of w_ij's class to all of w_kl's).
+        The decision is taken per pair of frequency classes, so the trace and
+        hermiticity of rho are preserved and the result does not depend on the
+        choice of eigenvectors inside degenerate subspaces.
+
+        Keeping all frequency-matched terms makes L independent of the choice
+        of eigenvectors inside degenerate subspaces, and keeps the coherence-
+        transfer terms of equally spaced ladders (e.g. rho_10 <- rho_21 for a
+        harmonic mode).
+
+        params.yaml, under 'bath':
+            secular_cutoff (float): the factor in (b); default 1. Use 0 to keep
+                only exact matches.
+            secular_tolerance (float): the tolerance in (a), in energy units;
+                default 1E-8 times the largest |eigenvalue| of H.
+
+        For separable manifolds, couplings between optical coherences
+        (ket and bra in different manifolds) keep the same terms as before
+        (the bath acting on the ket or on the bra alone), now including the
+        frequency-matched off-diagonal ones.
 """
-        e = self.eigenvalues[manifold_key]
-        v = self.eigenvectors[manifold_key]
 
-        CO = np.conjugate(v.T).dot(CO).dot(v)
+    def set_secular_parameters(self):
+        bath = self.params['bath']
+        self.secular_cutoff = float(bath.get('secular_cutoff',1.0))
+        e_max = max(np.max(np.abs(self.eigenvalues[key])) for key in self.manifolds)
+        default_tol = 1E-8 * max(e_max,1.0)
+        tol = bath.get('secular_tolerance',None)
+        self.secular_tolerance = default_tol if tol is None else float(tol)
 
-        CO_dagger = np.conjugate(CO.T)
-
-        eki = e[np.newaxis,:] - e[:,np.newaxis]
-
-        cki = np.zeros(eki.shape)
-        for i in range(e.size):
-            for k in range(e.size):
-                cki[i,k] = SD(eki[i,k])
-
-        Yiikk = CO * CO_dagger * cki
-
-        CO_diag = CO.diagonal()
-
-        Yijij = CO_diag[:,np.newaxis]*CO_diag[np.newaxis,:] * SD(0)
-
-        Yijji = CO * CO * cki
-
-        return Yiikk, Yijij, Yijji
-
-    def make_Y1(self,manifold_key):
-        """Creates vibrational dissipation tensor, based upon a bilinear
-            coupling of the explicit vibrations to the bath
-        Args:
-            manifold_key (str): can be 'all_manifolds' or '0','1','2',...
+    def bath_coupling_terms(self,manifold_key):
+        """List of (system-bath coupling operator, spectral density) for the
+            given manifold, in the original (site) basis. Mirrors the
+            operators used by RedfieldConstructor.make_Y1, make_Y2 and make_Y3.
 """
-        size = self.eigenvalues[manifold_key].size
-        Y1_iikk = np.zeros((size,size))
-        Y1_ijij = np.zeros((size,size))
-        Y1_ijji = np.zeros((size,size))
-        if self.num_vibrations == 0:
-            return Y1_iikk, Y1_ijij, Y1_ijji
-        
-        spectral_density = self.SD['vibration_bath']
-        if manifold_key == 'all_manifolds':
-            pass
-        else:
-            manifold_num = int(manifold_key)
+        terms = []
 
-        for p in range(self.PolyVib.num_vibrations):
-            # creation operator
-            ad_p = self.PolyVib.total_ups[p]
-            if manifold_key == 'all_manifolds':
-                x_p = (ad_p + ad_p.T)/np.sqrt(2)
-            else:
-                ad_p_man = self.PolyVib.extract_vibronic_manifold(ad_p,manifold_num)
-                x_p = (ad_p_man + ad_p_man.T)/np.sqrt(2)
-            a,b,c = self.make_dissipation_tensor(x_p,manifold_key,spectral_density)
-            Y1_iikk += a
-            Y1_ijij += b
-            Y1_ijji += c
+        # vibrations, bilinearly coupled to their bath
+        if self.num_vibrations > 0:
+            spectral_density = self.SD['vibration_bath']
+            for p in range(self.PolyVib.num_vibrations):
+                ad_p = self.PolyVib.total_ups[p]
+                if manifold_key == 'all_manifolds':
+                    x_p = (ad_p + ad_p.T)/np.sqrt(2)
+                else:
+                    ad_p_man = self.PolyVib.extract_vibronic_manifold(ad_p,int(manifold_key))
+                    x_p = (ad_p_man + ad_p_man.T)/np.sqrt(2)
+                terms.append((x_p,spectral_density))
 
-        
-        return Y1_iikk, Y1_ijij, Y1_ijji
+        # electronic dephasing: projectors onto singly-, doubly-, triply-occupied sites
+        def site_SD(key,n):
+            if self.multiple_site_bath:
+                return self.SD[key][n]
+            return self.SD[key]
 
-    def make_Y2(self,manifold_key):
-        """Creates an electronic dissipation tensor, based upon 
-            uncorrelated baths associated with each diabatic excited state
-        Args:
-            manifold_key (str): can be 'all_manifolds' or '0','1','2',...
-"""
-        if self.multiple_site_bath:
-            size = self.eigenvalues[manifold_key].size
-            Y2_iikk = np.zeros((size, size))
-            Y2_ijij = np.zeros((size, size))
-            Y2_ijji = np.zeros((size, size))
-
+        def add_projectors(occupied_list,key):
             for n in range(self.PolyVib.Polymer.num_sites):
-                spectral_density = self.SD['site_bath'][n]
-                # site projector operators
-                P_n = self.PolyVib.Polymer.occupied_list[n]
-                P_n = self.extract_electronic_operator(P_n, manifold_key)
-
-                P_n = np.kron(P_n, self.PolyVib.vibrational_identity)
-                a, b, c = self.make_dissipation_tensor(P_n, manifold_key, spectral_density)
-                Y2_iikk += a
-                Y2_ijij += b
-                Y2_ijji += c
-
-            if self.N >= 3:
-                if 'site_bath2' in self.params['bath']:
-
-                    for n in range(self.PolyVib.Polymer.num_sites):
-                        spectral_density = self.SD['site_bath2'][n]
-                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
-                        P_n2 = self.extract_electronic_operator(P_n2, manifold_key)
-
-                        P_n2 = np.kron(P_n2, self.PolyVib.vibrational_identity)
-                        a2, b2, c2 = self.make_dissipation_tensor(P_n2, manifold_key, spectral_density)
-                        Y2_iikk += a2
-                        Y2_ijij += b2
-                        Y2_ijji += c2
-
-            if self.N >= 4:
-                if 'site_bath3' in self.params['bath']:
-
-                    for n in range(self.PolyVib.Polymer.num_sites):
-                        spectral_density = self.SD['site_bath3'][n]
-                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
-                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
-
-                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
-                        a3, b3, c3 = self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
-                        Y2_iikk += a3
-                        Y2_ijij += b3
-                        Y2_ijji += c3
-
-        else :
-            spectral_density = self.SD['site_bath']
-            size = self.eigenvalues[manifold_key].size
-            Y2_iikk = np.zeros((size,size))
-            Y2_ijij = np.zeros((size,size))
-            Y2_ijji = np.zeros((size,size))
-
-            for n in range(self.PolyVib.Polymer.num_sites):
-                # site projector operators
-                P_n = self.PolyVib.Polymer.occupied_list[n]
+                P_n = occupied_list[n]
                 P_n = self.extract_electronic_operator(P_n,manifold_key)
-
                 P_n = np.kron(P_n,self.PolyVib.vibrational_identity)
-                a,b,c = self.make_dissipation_tensor(P_n,manifold_key,spectral_density)
-                Y2_iikk += a
-                Y2_ijij += b
-                Y2_ijji += c
+                terms.append((P_n,site_SD(key,n)))
 
+        add_projectors(self.PolyVib.Polymer.occupied_list,'site_bath')
+        if self.N >= 3 and 'site_bath2' in self.params['bath']:
+            add_projectors(self.PolyVib.Polymer.doubly_occupied_list,'site_bath2')
+        if self.N >= 4 and 'site_bath3' in self.params['bath']:
+            add_projectors(self.PolyVib.Polymer.triply_occupied_list,'site_bath3')
+
+        # internal conversion (only possible when manifolds are not separated)
+        if manifold_key == 'all_manifolds':
+            def add_sigma_x(up_list,key):
+                spectral_density = self.SD[key]
+                for n in range(self.PolyVib.Polymer.num_sites):
+                    up_n = up_list[n]
+                    up_n = self.extract_electronic_operator(up_n,manifold_key)
+                    up_n = np.kron(up_n,self.PolyVib.vibrational_identity)
+                    terms.append((up_n + up_n.T,spectral_density))
+
+            if 'site_internal_conversion_bath' in self.SD:
+                add_sigma_x(self.PolyVib.Polymer.up_list,'site_internal_conversion_bath')
             if self.N >= 3:
-                if 'site_bath2' in self.params['bath']:
-                    spectral_density = self.SD['site_bath2']
-
-                    for n in range(self.PolyVib.Polymer.num_sites):
-
-                        P_n2 = self.PolyVib.Polymer.doubly_occupied_list[n]
-                        P_n2 = self.extract_electronic_operator(P_n2,manifold_key)
-
-                        P_n2 = np.kron(P_n2,self.PolyVib.vibrational_identity)
-                        a2 , b2 , c2 = self.make_dissipation_tensor(P_n2,manifold_key,spectral_density)
-                        Y2_iikk += a2
-                        Y2_ijij += b2
-                        Y2_ijji += c2
-
+                if 'site_internal_conversion_bath21' in self.params['bath']:
+                    add_sigma_x(self.PolyVib.Polymer.up21_list,'site_internal_conversion_bath21')
+                if 'site_internal_conversion_bath20' in self.params['bath']:
+                    add_sigma_x(self.PolyVib.Polymer.up20_list,'site_internal_conversion_bath20')
             if self.N >= 4:
-                if 'site_bath3' in self.params['bath']:
-                    spectral_density = self.SD['site_bath3']
+                if 'site_internal_conversion_bath32' in self.params['bath']:
+                    add_sigma_x(self.PolyVib.Polymer.up32_list,'site_internal_conversion_bath32')
+                if 'site_internal_conversion_bath31' in self.params['bath']:
+                    add_sigma_x(self.PolyVib.Polymer.up31_list,'site_internal_conversion_bath31')
+                if 'site_internal_conversion_bath30' in self.params['bath']:
+                    add_sigma_x(self.PolyVib.Polymer.up30_list,'site_internal_conversion_bath30')
 
-                    for n in range(self.PolyVib.Polymer.num_sites):
-
-                        P_n3 = self.PolyVib.Polymer.triply_occupied_list[n]
-                        P_n3 = self.extract_electronic_operator(P_n3, manifold_key)
-
-                        P_n3 = np.kron(P_n3, self.PolyVib.vibrational_identity)
-                        a3, b3, c3 = self.make_dissipation_tensor(P_n3, manifold_key, spectral_density)
-                        Y2_iikk += a3
-                        Y2_ijij += b3
-                        Y2_ijji += c3
-
-        return Y2_iikk, Y2_ijij, Y2_ijji
-
-    def make_Y3(self):
-        """Creates non-adiabatic dissipation tensor by using the sigma_x
-            Pauli spin matrix as the coupling operator for each 2LS
-"""
-        spectral_density = self.SD['site_internal_conversion_bath']
-        manifold_key = 'all_manifolds'
-        size = self.eigenvalues[manifold_key].size
-        
-        Y3_iikk = np.zeros((size,size))
-        Y3_ijij = np.zeros((size,size))
-        Y3_ijji = np.zeros((size,size))
-        
-        for n in range(self.PolyVib.Polymer.num_sites):
-            # electronic excitation creation operator
-            up_n = self.PolyVib.Polymer.up_list[n]
-            up_n = self.extract_electronic_operator(up_n,manifold_key)
-            up_n = np.kron(up_n,self.PolyVib.vibrational_identity)
-            sigma_x_n = up_n + up_n.T
-
-            a,b,c = self.make_dissipation_tensor(sigma_x_n,manifold_key,spectral_density)
-            Y3_iikk += a
-            Y3_ijij += b
-            Y3_ijji += c
-
-        if self.N >= 3:
-            if 'site_internal_conversion_bath21' in self.params['bath']:
-                spectral_density = self.SD['site_internal_conversion_bath21']
-                manifold_key = 'all_manifolds'
-
-                for n in range(self.PolyVib.Polymer.num_sites):
-
-                    up_n21 = self.PolyVib.Polymer.up21_list[n]
-                    up_n21 = self.extract_electronic_operator(up_n21,manifold_key)
-                    up_n21 = np.kron(up_n21,self.PolyVib.vibrational_identity)
-                    sigma_x_n21 = up_n21 + up_n21.T
-
-                    a21, b21, c21 = self.make_dissipation_tensor(sigma_x_n21,manifold_key,spectral_density)
-                    Y3_iikk += a21
-                    Y3_ijij += b21
-                    Y3_ijji += c21
-
-            if 'site_internal_conversion_bath20' in self.params['bath']:
-                spectral_density = self.SD['site_internal_conversion_bath20']
-                manifold_key = 'all_manifolds'
-
-                for n in range(self.PolyVib.Polymer.num_sites):
-
-                    up_n20 = self.PolyVib.Polymer.up20_list[n]
-                    up_n20 = self.extract_electronic_operator(up_n20, manifold_key)
-                    up_n20 = np.kron(up_n20, self.PolyVib.vibrational_identity)
-                    sigma_x_n20 = up_n20 + up_n20.T
-
-                    a20, b20, c20 = self.make_dissipation_tensor(sigma_x_n20,manifold_key,spectral_density)
-                    Y3_iikk += a20
-                    Y3_ijij += b20
-                    Y3_ijji += c20
-
-        if self.N >= 4:
-            if 'site_internal_conversion_bath32' in self.params['bath']:
-                spectral_density = self.SD['site_internal_conversion_bath32']
-                manifold_key = 'all_manifolds'
-
-                for n in range(self.PolyVib.Polymer.num_sites):
-
-                    up_n32 = self.PolyVib.Polymer.up32_list[n]
-                    up_n32 = self.extract_electronic_operator(up_n32, manifold_key)
-                    up_n32 = np.kron(up_n32, self.PolyVib.vibrational_identity)
-                    sigma_x_n32 = up_n32 + up_n32.T
-
-                    a32, b32, c32 = self.make_dissipation_tensor(sigma_x_n32, manifold_key, spectral_density)
-                    Y3_iikk += a32
-                    Y3_ijij += b32
-                    Y3_ijji += c32
-
-            if 'site_internal_conversion_bath31' in self.params['bath']:
-                spectral_density = self.SD['site_internal_conversion_bath31']
-                manifold_key = 'all_manifolds'
-
-                for n in range(self.PolyVib.Polymer.num_sites):
-
-                    up_n31 = self.PolyVib.Polymer.up31_list[n]
-                    up_n31 = self.extract_electronic_operator(up_n31, manifold_key)
-                    up_n31 = np.kron(up_n31, self.PolyVib.vibrational_identity)
-                    sigma_x_n31 = up_n31 + up_n31.T
-
-                    a31, b31, c31 = self.make_dissipation_tensor(sigma_x_n31, manifold_key, spectral_density)
-                    Y3_iikk += a31
-                    Y3_ijij += b31
-                    Y3_ijji += c31
-
-            if 'site_internal_conversion_bath30' in self.params['bath']:
-                spectral_density = self.SD['site_internal_conversion_bath30']
-                manifold_key = 'all_manifolds'
-
-                for n in range(self.PolyVib.Polymer.num_sites):
-
-                    up_n30 = self.PolyVib.Polymer.up30_list[n]
-                    up_n30 = self.extract_electronic_operator(up_n30, manifold_key)
-                    up_n30 = np.kron(up_n30, self.PolyVib.vibrational_identity)
-                    sigma_x_n30 = up_n30 + up_n30.T
-
-                    a30, b30, c30 = self.make_dissipation_tensor(sigma_x_n30, manifold_key, spectral_density)
-                    Y3_iikk += a30
-                    Y3_ijij += b30
-                    Y3_ijji += c30
-
-        return Y3_iikk, Y3_ijij, Y3_ijji
-
-    def make_R_from_Y(self,Yiikk,Yijij,Yijji):
-        """Given the dissipation operator Y, constructs the Redfield tensor
-        Args:
-            Y (np.ndarray): 4-index array dissipation tensor
-            manifold_key (str): can be 'all_manifolds' or '0','1','2',...
-"""
-        Riikk = -2*np.real(Yiikk) + np.eye(Yiikk.shape[0]) * np.sum(2*np.real(Yijji),axis=0)
-        Rijij = -(Yijij + np.conjugate(Yijij.T)) + np.sum(Yijji,axis=0)[:,np.newaxis] + np.sum(np.conjugate(Yijji),axis=0)[np.newaxis,:]
-
-        if not np.allclose(Riikk.diagonal(),Rijij.diagonal()):
-            warnings.warn('Two methods of making Riiii yield different answers')
-
-        R = sp.diags(Rijij.flatten(),format='lil')
-
-        H_size = Riikk.shape[0]
-        pop_inds = np.arange(H_size)*(H_size+1)
-
-        for i in range(H_size):
-            R[pop_inds[i],pop_inds] = Riikk[i,:]
-
-        return R.tocsr()
-
-    def make_R_from_Y_coherence(self,Yket_ijji,Ybra_ijji,ket_manifold_key,bra_manifold_key):
-        """Makes Redfield tensor for optical coherence states, in the case
-            that each electronic excitation manifold is separable.
-        Args:
-            Yket (np.ndarray): 4-index array dissipation tensor for the ket
-                excitation manifold
-            Ybra (np.ndarray): 4-index array dissipation tensor for the bra
-                excitation manifold
-            ket_manifold_key (str): bra manifold, can be '0','1','2',...
-            bra_manifold_key (str): ket manifold, can be '0','1','2',...
-"""
-        if ket_manifold_key == bra_manifold_key:
-            raise Exception('You must use make_R_from_Y for ket and bra manifold keys equal to each other')
-
-        Rijij = np.sum(Yket_ijji,axis=0)[:,np.newaxis] + np.sum(np.conjugate(Ybra_ijji),axis=0)[np.newaxis,:]
-
-        R = sp.diags(Rijij.flatten(),format='csr')
-        
-        return R
-
-    def make_flat_R(self,ket_manifold,bra_manifold):
-        if ket_manifold == 'all_manifolds':
-            Ys = self.Y['all_manifolds']
-            R = self.make_R_from_Y(*Ys)
-        elif ket_manifold == bra_manifold:
-            Ys = self.Y[ket_manifold]
-            R = self.make_R_from_Y(*Ys)
-        elif ket_manifold != bra_manifold:
-            a,b,Yket_ijji = self.Y[ket_manifold]
-            a,b,Ybra_ijji = self.Y[bra_manifold]
-            R = self.make_R_from_Y_coherence(Yket_ijji,Ybra_ijji,ket_manifold,bra_manifold)
-            
-        return R
+        return terms
 
     def set_Y(self):
+        """For each manifold, stores the bath coupling operators in the
+            Hamiltonian eigenbasis, A_b, with G_b = C_b * A_b (elementwise,
+            C_b[i,k] = SD_b(e_k - e_i)) and T = sum_b A_b^dagger G_b. In terms of
+            these the Redfield dissipation tensor of RedfieldConstructor is
+            Y_ijkl = sum_b G_b[i,k] A_b^dagger[j,l] and its trace
+            T_ik = sum_n Y_nikn; nothing of size N^4 is ever formed.
+"""
+        self.set_secular_parameters()
         self.Y = {}
         for manifold in self.manifolds:
-            Y1_iikk, Y1_ijij, Y1_ijji = self.make_Y1(manifold)
-            Y2_iikk, Y2_ijij, Y2_ijji = self.make_Y2(manifold)
-            
-            self.Y[manifold] = (Y1_iikk + Y2_iikk,
-                                Y1_ijij + Y2_ijij,
-                                Y1_ijji + Y2_ijji)
-            if manifold == 'all_manifolds':
-                Y3_iikk, Y3_ijij, Y3_ijji = self.make_Y3()
-                self.Y[manifold] = (Y1_iikk + Y2_iikk + Y3_iikk,
-                                    Y1_ijij + Y2_ijij + Y3_ijij,
-                                    Y1_ijji + Y2_ijji + Y3_ijji)
+            e = self.eigenvalues[manifold]
+            v = self.eigenvectors[manifold]
+            eki = e[np.newaxis,:] - e[:,np.newaxis]     # eki[i,k] = e_k - e_i
+            G_list = []
+            Adag_list = []
+            T = np.zeros((e.size,e.size),dtype='complex')
+            for CO, SD in self.bath_coupling_terms(manifold):
+                A = np.conjugate(v.T).dot(CO).dot(v)
+                Adag = np.conjugate(A.T)
+                G = spectral_density_matrix(SD,eki) * A
+                G_list.append(G)
+                Adag_list.append(Adag)
+                T += Adag.dot(G)
+            if np.allclose(T.imag,0):
+                T = T.real
+            self.Y[manifold] = {'G':G_list,'Adag':Adag_list,'T':T}
+
+    def _R_values(self,ket_manifold,bra_manifold,I,J,K,L):
+        """Redfield tensor elements R_ijkl (rho_kl -> rho_ij) for arrays of
+            indices, using the same formula as RedfieldConstructor.make_R_from_Y:
+            R_ijkl = -(Y_ijkl + Y*_jilk) + delta_jl T_ik + delta_ik T*_jl.
+            Between different manifolds (separable case) only the delta terms
+            are present, as in RedfieldConstructor.make_R_from_Y_coherence.
+"""
+        Yk = self.Y[ket_manifold]
+        Yb = self.Y[bra_manifold]
+        R = np.zeros(I.size,dtype='complex')
+        jl = J == L
+        ik = I == K
+        R[jl] += Yk['T'][I[jl],K[jl]]
+        R[ik] += np.conjugate(Yb['T'][J[ik],L[ik]])
+        if ket_manifold == bra_manifold:
+            for G, Adag in zip(Yk['G'],Yk['Adag']):
+                R -= G[I,K] * Adag[J,L]
+                R -= np.conjugate(G[J,L] * Adag[I,K])
+        return R
+
+    def make_flat_R(self,ket_manifold,bra_manifold,*,chunk_size=int(2E6)):
+        """Sparse Redfield tensor on the flattened (row-major, index i*n_bra+j)
+            density matrix, keeping the frequency-matched terms described in the
+            class docstring.
+"""
+        e_ket = self.eigenvalues[ket_manifold]
+        e_bra = self.eigenvalues[bra_manifold]
+        n_ket, n_bra = e_ket.size, e_bra.size
+        size = n_ket * n_bra
+        w = (e_ket[:,np.newaxis] - e_bra[np.newaxis,:]).ravel()
+        tol = self.secular_tolerance
+        kappa = self.secular_cutoff
+
+        # frequency classes: elements whose Bohr frequencies agree within tol.
+        # Elements of class c are order[c_start[c] : c_start[c] + c_size[c]]
+        order = np.argsort(w,kind='stable')
+        w_sorted = w[order]
+        new_class = np.concatenate(([True],np.diff(w_sorted) > tol))
+        cls_sorted = np.cumsum(new_class) - 1
+        n_cls = cls_sorted[-1] + 1
+        cls = np.empty(size,dtype='int64')
+        cls[order] = cls_sorted
+        c_size = np.bincount(cls_sorted,minlength=n_cls)
+        c_start = np.concatenate(([0],np.cumsum(c_size)[:-1]))
+        w_cls = np.bincount(cls_sorted,weights=w_sorted,minlength=n_cls) / c_size
+
+        # largest possible |R_pq|; the Frobenius norm of the block between
+        # classes of sizes m_p, m_q is at most R_bound * sqrt(m_p * m_q)
+        Yk = self.Y[ket_manifold]
+        Yb = self.Y[bra_manifold]
+        R_bound = np.max(np.abs(Yk['T']),initial=0) + np.max(np.abs(Yb['T']),initial=0)
+        if ket_manifold == bra_manifold:
+            R_bound += 2 * sum(np.max(np.abs(G),initial=0) * np.max(np.abs(Ad),initial=0)
+                               for G, Ad in zip(Yk['G'],Yk['Adag']))
+
+        # candidate class pairs (cp <- cq): searched separately for each class
+        # size, so that large classes (e.g. the populations) get a wide enough
+        # window without widening it for everything else
+        cps, cqs = [], []
+        all_cls = np.arange(n_cls)
+        for m in np.unique(c_size):
+            bucket = np.where(c_size == m)[0]          # sorted by frequency
+            window = kappa * R_bound * np.sqrt(m * c_size) + 2 * tol
+            lo = np.searchsorted(w_cls[bucket],w_cls - window,side='left')
+            hi = np.searchsorted(w_cls[bucket],w_cls + window,side='right')
+            cnt = hi - lo
+            cq = np.repeat(all_cls,cnt)
+            offsets = np.arange(cq.size) - np.repeat(np.cumsum(cnt) - cnt,cnt)
+            cp = bucket[np.repeat(lo,cnt) + offsets]
+            cps.append(cp)
+            cqs.append(cq)
+        cp = np.concatenate(cps)
+        cq = np.concatenate(cqs)
+        dw = np.abs(w_cls[cp] - w_cls[cq])
+        possible = (cp == cq) | (dw < kappa * R_bound * np.sqrt(c_size[cp] * c_size[cq]))
+        cp, cq = cp[possible], cq[possible]
+
+        # expand class pairs into element pairs, in chunks, and evaluate R
+        n_pairs = c_size[cp] * c_size[cq]
+        rows, cols, vals, grp = [], [], [], []
+        start = 0
+        while start < cp.size:
+            cum = np.cumsum(n_pairs[start:])
+            stop = start + max(1,int(np.searchsorted(cum,chunk_size,side='right')))
+            stop = min(stop,cp.size)
+            g = np.arange(start,stop)
+            npair = n_pairs[g]
+            G = np.repeat(g,npair)
+            k = np.arange(G.size) - np.repeat(np.cumsum(npair) - npair,npair)
+            mq = c_size[cq[G]]
+            P = order[c_start[cp[G]] + k // mq]
+            Q = order[c_start[cq[G]] + k % mq]
+            I, J = np.divmod(P,n_bra)
+            K, L = np.divmod(Q,n_bra)
+            R = self._R_values(ket_manifold,bra_manifold,I,J,K,L)
+            # drop exact zeros and rounding-level remainders (e.g. -2Y + 2T
+            # for a single state), which the old secular construction gave as 0
+            nz = np.abs(R) > 1E-14 * R_bound
+            rows.append(P[nz])
+            cols.append(Q[nz])
+            vals.append(R[nz])
+            grp.append(G[nz])
+            start = stop
+        rows = np.concatenate(rows)
+        cols = np.concatenate(cols)
+        vals = np.concatenate(vals)
+        grp = np.concatenate(grp)
+
+        # one decision per pair of frequency classes: keep the whole block when
+        # the classes match, or when their frequency difference is below
+        # secular_cutoff times the block's Frobenius norm. The norm is unchanged
+        # by rotations inside degenerate subspaces, and keeping whole classes
+        # preserves the trace and hermiticity of rho.
+        g_norm = np.sqrt(np.bincount(grp,weights=np.abs(vals)**2,minlength=cp.size))
+        g_keep = (cp == cq) | (np.abs(w_cls[cp] - w_cls[cq]) < kappa * g_norm)
+        keep = g_keep[grp]
+        rows, cols, vals = rows[keep], cols[keep], vals[keep]
+        if np.allclose(vals.imag,0):
+            vals = vals.real
+        R = sp.csr_matrix((vals,(rows,cols)),shape=(size,size))
+        return R
 
     def make_U(self,ket_manifold,bra_manifold):
         e_ket = self.eigenvalues[ket_manifold]
         e_bra = self.eigenvalues[bra_manifold]
-        
+
         U_vec = -1j * (np.kron(e_ket,np.ones(e_bra.size)) - np.kron(np.ones(e_ket.size),e_bra))
         U = sp.diags(U_vec,format='csr')
         return U
@@ -1366,6 +1295,13 @@ class DiagonalizeLiouvillian:
         return eigvals, eigvecs, eigvecs_left
 
     def eig2(self,L_key,*,check_eigenvectors = True):
+        """Diagonalizes a secular Liouvillian block by block. L is split into
+            the connected components of its off-diagonal couplings (the
+            population block, and any groups of frequency-matched coherences);
+            each component is diagonalized densely and the rest is already
+            diagonal. Zero-eigenvalue (steady-state) eigenvectors are normalized
+            to unit trace.
+"""
         if L_key == 'all_manifolds':
             ket_key = 'all_manifolds'
             bra_key = 'all_manifolds'
@@ -1374,24 +1310,40 @@ class DiagonalizeLiouvillian:
         L = self.L[L_key]
         if L.dtype == np.dtype('O'):
             L = L[()]
-        E = L.diagonal()
-        V = sp.eye(E.size,format='lil',dtype='complex')
-        VL = sp.eye(E.size,format='lil',dtype='complex')
-        
-        if ket_key == bra_key:
-            H_size = int(np.sqrt(E.size))
-            pop_inds = np.arange(H_size)*(H_size+1)
-            L_pop = np.zeros((H_size,H_size),dtype='complex')
-            for i in range(H_size):
-                L_pop[i,:] = L[pop_inds[i],pop_inds].toarray()
-            e, v, vl = self.eig(L_pop,populations_only=True)
-            E[pop_inds] = e[:]
-            for i,j in zip(pop_inds,range(len(pop_inds))):
-                
-                V[pop_inds,i] = v[:,j]
-                
-                VL[pop_inds,i] = vl[:,j]
+        L = sp.csr_matrix(L)
+        n = L.shape[0]
+        E = np.array(L.diagonal(),dtype='complex')
+        V = sp.eye(n,format='lil',dtype='complex')
+        VL = sp.eye(n,format='lil',dtype='complex')
 
+        pop_mask = np.zeros(n,dtype='bool')
+        if ket_key == bra_key:
+            H_size = int(np.sqrt(n))
+            pop_mask[np.arange(H_size)*(H_size+1)] = True
+
+        off = (L - sp.diags(L.diagonal())).tocsr()
+        off.eliminate_zeros()
+        num_blocks, labels = connected_components(off,directed=False)
+        block_sizes = np.bincount(labels,minlength=num_blocks)
+        for b in np.where(block_sizes > 1)[0]:
+            inds = np.where(labels == b)[0]
+            L_block = L[inds,:][:,inds].toarray()
+            e, v, vl = self.eig(L_block,check_eigenvectors=check_eigenvectors,
+                                populations_only=True)
+            # eig normalizes steady states by the sum of all their entries;
+            # renormalize by the sum over populations only (the trace)
+            block_pops = pop_mask[inds]
+            for m in np.where(np.isclose(e,0,atol=1E-12))[0]:
+                trace = v[block_pops,m].sum()
+                if block_pops.any() and np.abs(trace) > 0:
+                    v[:,m] = v[:,m] / trace
+                    vl[m,:] = vl[m,:] * trace
+            E[inds] = e
+            V[np.ix_(inds,inds)] = v
+            VL[np.ix_(inds,inds)] = vl
+
+        V = V.tocsr()
+        VL = VL.tocsr()
         if check_eigenvectors:
             LV = L.dot(V)
             D = VL.dot(LV)
@@ -1401,7 +1353,7 @@ class DiagonalizeLiouvillian:
                 if max_check_value > 1E-10:
                     warnings.warn('Using eigenvectors to diagonalize Liouvillian does not result in the expected diagonal matrix to tolerance, largest deviation is {}'.format(max_check_value))
 
-        return E,V.tocsr(),VL.tocsr()
+        return E,V,VL
 
     def diagonalize_L(self):
         ta = time.time()
