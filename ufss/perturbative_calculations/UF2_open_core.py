@@ -15,6 +15,8 @@ from ufss.perturbative_calculations import OpenBaseClass
 
 from ufss.perturbative_calculations import ChebPoly, cheb_perturbative_container
 from ufss.perturbative_calculations import HermitePoly, hermite_perturbative_container
+from ufss.perturbative_calculations.containers import (HermiteDampedTerm,
+    ChebDampedTerm, schrodinger_perturbative_container)
 
 class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
     """This class is designed to calculate perturbative wavepackets in the
@@ -65,6 +67,20 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         self.interaction_picture_calculations = True
 
         self.sparsity_threshold = .1
+
+        # For method = 'chebyshev' or 'hermite': if True (default), each
+        # interaction is solved in a Schrodinger-like picture that removes
+        # only the oscillating part of each Liouvillian eigenvalue and treats
+        # the decay exactly (see the Schrodinger-picture containers in
+        # containers.py). This stays accurate when some decay rates are fast
+        # compared to the pulse duration, where the interaction-picture
+        # integrand exp(-lambda t) grows exponentially across the pulse.
+        # If False, the original interaction-picture algorithm (with the
+        # exp_cutoff clamp) is used.
+        self.damped_spectral = True
+        # only used by the interaction-picture spectral algorithm
+        # (damped_spectral = False); np.inf means no clamping
+        self.exp_cutoff = np.inf
 
         # Cache of exp(sign * lambda * tau) on each time grid tau (see eig_exp).
         # Largest cached array, in complex elements (default ~ 160 MB); larger
@@ -151,6 +167,10 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
                              "pulse to one whose most recent interaction was "
                              "with a finite pulse")
 
+        if (getattr(ra,'schrodinger_picture',False)
+                or getattr(rb,'schrodinger_picture',False)):
+            return self.add_schrodinger_rhos(ra,rb)
+
         if ra.impulsive:
             return self.add_impulsive_rhos(ra,rb)
 
@@ -214,6 +234,23 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
             rab=cheb_perturbative_container(t,rho,bool_mask,pulse_number,
                                            manifold_key,pdc,t0,dom=dom)
         return rab
+
+    def add_schrodinger_rhos(self,ra,rb):
+        """Exact sum of two schrodinger_perturbative_container objects
+            (damped_spectral chebyshev/hermite). They store rho itself, so no
+            interaction-picture shift factor is needed.
+"""
+        if ra.t0 > rb.t0:
+            t0 = ra.t0
+            pulse_number = ra.pulse_number
+        else:
+            t0 = rb.t0
+            pulse_number = rb.pulse_number
+        bool_mask = np.logical_or(ra.bool_mask,rb.bool_mask)
+        return schrodinger_perturbative_container.combine(ra,rb,bool_mask,
+                                                          pulse_number,
+                                                          ra.manifold_key,
+                                                          ra.pdc,t0)
 
     def add_hermite_rhos(self,ra,rb):
         """Exact sum of two hermite_perturbative_container objects, which
@@ -354,7 +391,10 @@ class UF2OpenEngine(OpenBaseClass,UF2BaseClass):
         ev = self.eigenvectors[ev_key][:,mask]
         ket_size, bra_size = self.rho_shapes[ev_key]
 
-        rho = rho_obj(t)*self.eig_exp(ev_key,1,t_exp,mask)
+        if getattr(rho_obj,'schrodinger_picture',False):
+            rho = rho_obj.schrodinger(t)
+        else:
+            rho = rho_obj(t)*self.eig_exp(ev_key,1,t_exp,mask)
         if original_L_basis:
             new_rho = ev.dot(rho)
         else:
@@ -895,6 +935,18 @@ alias transitions onto nonzero electric field amplitudes.
         else:
             t_exp_2 = t
 
+        M = self.efield_times[pulse_number].size
+
+        if (self.damped_spectral and M > 1
+                and (self.method == 'chebyshev' or self.method == 'hermite')):
+            rho_out = self.damped_spectral_next_order(t,rho,n_nonzero,ev_key2,
+                                                       pulse_number,pulse_time,
+                                                       new_manifold_key,
+                                                       output_pdc,simultaneous)
+            self.next_order_counter += 1
+            self.next_order_time += time.time() - tnext_order0
+            return rho_out
+
         exp_factor2 = self.eig_exp(ev_key2,-1,t_exp_2,n_nonzero)
         
         if self.interaction_picture_calculations:
@@ -974,6 +1026,50 @@ alias transitions onto nonzero electric field amplitudes.
         self.next_order_time += time.time() - tnext_order0
 
         return rho_out
+
+    def damped_spectral_next_order(self,t,rho,n_nonzero,ev_key,pulse_number,
+                                   pulse_time,new_manifold_key,output_pdc,
+                                   simultaneous):
+        """Solves d rho_j/dt = lambda_j rho_j + source_j(t) for each
+            eigenmode j of the new density matrix, for method = 'chebyshev'
+            or 'hermite', without the interaction-picture factor
+            exp(-lambda_j t) (which grows like exp(gamma_j t) across the pulse
+            and ruins the spectral fit when gamma_j * pulse width >> 1).
+            Only the oscillation exp(1j omega_j t) is removed from the source;
+            the decay gamma_j is handled exactly by ChebDampedTerm /
+            HermiteDampedTerm.
+
+        Args:
+            t (np.ndarray) : spectral nodes of this pulse (absolute times)
+            rho (np.ndarray) : source term (n_modes, t.size), i.e. the
+                efield-weighted dipole times the previous-order rho
+"""
+        t0 = time.time()
+        e = self.eigenvalues[ev_key][n_nonzero]
+        gamma = -np.real(e)
+        # zero-eigenvalue (steady-state) modes may come out as +-1E-16
+        gamma = np.where(np.abs(gamma) < 1E-12,0.0,gamma)
+        if np.any(gamma < 0):
+            warnings.warn('Liouvillian has eigenvalues with positive real '
+                          'part; damped_spectral treats them as growing modes')
+        omega = np.imag(e)
+        t_ref = pulse_time if self.interaction_picture_shift else 0.0
+        u = rho * np.exp(-1j*omega[:,np.newaxis]*(t - t_ref)[np.newaxis,:])
+        idx = np.where(n_nonzero)[0]
+        if self.method == 'chebyshev':
+            dom = self.doms[pulse_number] + pulse_time
+            term = ChebDampedTerm.from_samples(idx,t,u,dom,t_ref,gamma,omega)
+        else:
+            center = self.herm_centers[pulse_number] + pulse_time
+            scale = self.herm_scales[pulse_number]
+            term = HermiteDampedTerm.from_samples(idx,t,u,center,scale,t_ref,
+                                                  gamma,omega)
+        self.convolution_time += time.time() - t0
+        return schrodinger_perturbative_container([term],n_nonzero,
+                                                  pulse_number,
+                                                  new_manifold_key,output_pdc,
+                                                  pulse_time,
+                                                  simultaneous=simultaneous)
 
 class Ununsed:
 

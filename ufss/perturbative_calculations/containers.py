@@ -1012,3 +1012,354 @@ class RK_perturbative_container:
 
     def __getitem__(self,inds):
         return self.f[:,inds]
+
+###############################################################################
+# Schrodinger-picture spectral containers ('chebyshev'/'hermite' with
+# widely varying decay rates)
+#
+# The interaction-picture containers above store, for each Liouvillian
+# eigenmode with eigenvalue lam = -gamma + 1j*omega,
+#     c(t) = int_{-inf}^t exp(-lam*(t'-t0)) f(t') dt',
+# and the engine recovers rho(t) = c(t) exp(lam*(t-t0)). For a strongly damped
+# mode (gamma * pulse duration >> 1) the integrand grows like
+# exp(gamma*(t'-t0)) across the pulse, so c(t) spans many orders of magnitude
+# over the window. A polynomial fit of c then carries absolute errors of
+# ~1E-16*max|c|, which exp(lam*(t-t0)) amplifies by up to
+# exp(gamma*halfwidth) at early times: the result is garbage, and clamping
+# the exponent (exp_cutoff) only trades that for a different, uncontrolled
+# error.
+#
+# The classes below remove only the oscillating part of the eigenvalue
+# (the interaction picture with respect to omega) and keep the decay explicit:
+#     ctilde(t) = rho(t) exp(-1j*omega*(t - t_ref)),
+#     d ctilde/dt = -gamma*ctilde + u(t),   u(t) = f(t) exp(-1j*omega*(t-t_ref)).
+# u is smooth and bounded (the same slowly varying envelope the interaction
+# picture produces) and so is ctilde, for every gamma >= 0. The damped ODE is
+# solved spectrally (exactly in closed form for Hermite; a Chebyshev tau
+# solve for Chebyshev), and the containers return rho(t) directly
+# ('Schrodinger picture'), so no exponential of a large argument is ever
+# formed. For gamma = 0 both reduce exactly to the previous antiderivatives.
+###############################################################################
+from scipy.special import erfcx as _serfcx
+from scipy.special import erfc as _serfc
+
+def _damped_gaussian_integral(kappa,x):
+    """E_kappa(x) = int_{-inf}^x exp(-kappa*(x-y)) exp(-y**2) dy for
+        kappa >= 0 (array, one per row) and points x, evaluated without
+        overflow: with z = kappa/2 - x,
+            z >= 0: sqrt(pi)/2 * exp(-x**2) * erfcx(z)
+            z <  0: sqrt(pi)/2 * exp(kappa**2/4 - kappa*x) * erfc(z)
+        (the exponent in the second branch is <= 0 there).
+        E_0 = sqrt(pi)*Phi(x), the ramp of HermitePoly.integrate().
+"""
+    kappa = np.asarray(kappa,dtype='float')[:,np.newaxis]
+    x = np.asarray(x,dtype='float')[np.newaxis,:]
+    z = kappa/2 - x
+    pos = z >= 0
+    with np.errstate(over='ignore',under='ignore',invalid='ignore'):
+        e_pos = np.exp(-x**2) * _serfcx(np.where(pos,z,0.0))
+        e_neg = np.exp(np.where(pos,0.0,kappa**2/4 - kappa*x)) * _serfc(np.where(pos,0.0,z))
+    return np.sqrt(np.pi)/2 * np.where(pos,e_pos,e_neg)
+
+class HermiteDampedTerm:
+    """Exact causal solution of d ctilde/dt = -gamma*ctilde + u for a source
+        u = exp(-x**2) sum_n b_n h_n(x), x = (t-center)/scale (as represented
+        by HermitePoly), one row per eigenmode:
+
+            ctilde = scale*[ a*E_kappa(x) + exp(-x**2) sum_m q_m h_m(x) ],
+            kappa = gamma*scale,
+
+        with E_kappa from _damped_gaussian_integral. Matching coefficients
+        of h_n (using d/dx[exp(-x**2) h_m] = -sqrt(2(m+1)) exp(-x**2) h_{m+1})
+        gives the square triangular system
+            kappa*q_n - sqrt(2n)*q_{n-1} + delta_{n0}*pi**(1/4)*a = b_n,
+            n = 0..N-1,  q_{N-1} = 0,
+        solved here by back substitution. For kappa = 0 this is exactly
+        HermitePoly.integrate() (ramp_amplitude = a*sqrt(pi)*scale).
+        Stores rho itself: rho(t) = ctilde(t)*exp(1j*omega*(t - t_ref)).
+"""
+    kind = 'hermite'
+    def __init__(self,idx,center,scale,t_ref,gamma,omega,a,q):
+        self.idx = np.asarray(idx)
+        self.center = float(center)
+        self.scale = float(scale)
+        self.t_ref = float(t_ref)
+        self.gamma = np.asarray(gamma,dtype='float')
+        self.omega = np.asarray(omega,dtype='float')
+        self.a = np.asarray(a,dtype='complex')
+        self.q = np.asarray(q,dtype='complex')
+
+    # Largest error amplification accepted from solving the triangular
+    # system exactly (see solve_coefficients)
+    exact_amplification_limit = 1E8
+
+    @classmethod
+    def solve_coefficients(cls,b,kappa):
+        """Returns (a, q) for source coefficients b (n, N) and kappa (n,).
+
+            The triangular system in the class docstring has a unique
+            solution, but back substitution amplifies errors by
+            A = prod_{m=1}^{n_c} kappa/sqrt(2m) ~ exp(kappa**2/4), with
+            n_c = floor(kappa**2/2): the exact a and Q of the *truncated*
+            source become huge and cancel. Recurrence directions:
+              - upward  q_n = (b_n + sqrt(2n) q_{n-1})/kappa is stable for
+                n < kappa**2/2 (it is the large-kappa asymptotic expansion);
+              - downward q_{n-1} = (kappa q_n - b_n)/sqrt(2n) is stable for
+                n > kappa**2/2.
+            Rows with A <= exact_amplification_limit use the exact solution
+            (downward all the way, then a from the n = 0 equation). Other
+            rows set a = 0, run upward for n <= n_c and downward from the
+            top for n > n_c; the only equation left unsatisfied is n_c+1,
+            whose residual is the exact tail term a*E_kappa projected at the
+            index where its homogeneous solution r_n ~ prod sqrt(2m)/kappa is
+            smallest (~ exp(-kappa**2/4)), i.e. it is negligible whenever the
+            source is resolved. Either way the error is ~ 1E-16*A or ~ 1/A,
+            so the worst case (A ~ 1E8) is ~1E-8 relative.
+"""
+        n, N = b.shape
+        a = np.zeros(n,dtype='complex')
+        q = np.zeros((n,max(N-1,0)),dtype='complex')
+        if N == 1:
+            a[:] = b[:,0]/np.pi**0.25
+            return a, q
+        kappa = np.asarray(kappa,dtype='float')
+        nc = np.minimum(np.floor(kappa**2/2).astype('int'),N-1)
+        m = np.arange(1,N)
+        with np.errstate(divide='ignore'):
+            log_terms = np.log(np.maximum(kappa,1E-300))[:,np.newaxis] - 0.5*np.log(2*m)[np.newaxis,:]
+        log_A = np.sum(np.where(m[np.newaxis,:] <= nc[:,np.newaxis],log_terms,0.0),axis=1)
+        exact = log_A <= np.log(cls.exact_amplification_limit)
+        # q has entries 0..N-2 (q_{N-1} = 0); use a work array with q_{N-1}
+        qw = np.zeros((n,N),dtype='complex')
+        # downward pass: exact rows all the way, glued rows only for m > nc
+        for mm in range(N-1,0,-1):
+            rows = exact | (mm > nc)
+            if np.any(rows):
+                qw[rows,mm-1] = (kappa[rows]*qw[rows,mm] - b[rows,mm])/np.sqrt(2*mm)
+        a[exact] = (b[exact,0] - kappa[exact]*qw[exact,0])/np.pi**0.25
+        glued = ~exact
+        if np.any(glued):
+            kg = kappa[glued]
+            bg = b[glued]
+            ncg = nc[glued]
+            qg = qw[glued]
+            prev = np.zeros(kg.size,dtype='complex')
+            for nn in range(N):
+                rows = nn <= ncg
+                if not np.any(rows):
+                    break
+                val = (bg[:,nn] + np.sqrt(2*nn)*prev)/kg
+                qg[rows,nn] = val[rows]
+                prev = val
+            qw[glued] = qg
+        q[:] = qw[:,:N-1]
+        # if n_c = N-1 the glued upward pass sets q_{N-1} != 0, which is the
+        # (small) residual of the top equation; keep it as part of Q
+        if np.any(glued & (nc == N-1)):
+            q = np.hstack((q,np.zeros((n,1),dtype='complex')))
+            rows = glued & (nc == N-1)
+            q[rows,N-1] = qw[rows,N-1]
+        return a, q
+
+    @classmethod
+    def from_samples(cls,idx,t,u,center,scale,t_ref,gamma,omega):
+        hp = HermitePoly(t,u,center=center,scale=scale)
+        a, q = cls.solve_coefficients(hp.coefs,gamma*scale)
+        return cls(idx,center,scale,t_ref,gamma,omega,a,q)
+
+    def same_grid(self,other):
+        return (isinstance(other,HermiteDampedTerm)
+                and np.isclose(self.center,other.center,rtol=0,atol=1E-12*max(1,abs(self.center)))
+                and np.isclose(self.scale,other.scale,rtol=1E-12,atol=0)
+                and np.isclose(self.t_ref,other.t_ref,rtol=0,atol=1E-12*max(1,abs(self.t_ref))))
+
+    def merged(self,other):
+        idx = np.union1d(self.idx,other.idx)
+        deg = max(self.q.shape[1],other.q.shape[1])
+        a = np.zeros(idx.size,dtype='complex')
+        q = np.zeros((idx.size,deg),dtype='complex')
+        gamma = np.zeros(idx.size)
+        omega = np.zeros(idx.size)
+        for term in (self,other):
+            pos = np.searchsorted(idx,term.idx)
+            a[pos] += term.a
+            q[pos,:term.q.shape[1]] += term.q
+            gamma[pos] = term.gamma
+            omega[pos] = term.omega
+        return HermiteDampedTerm(idx,self.center,self.scale,self.t_ref,
+                                 gamma,omega,a,q)
+
+    def __call__(self,t):
+        t = np.atleast_1d(np.asarray(t,dtype='float'))
+        x = (t - self.center)/self.scale
+        ans = self.a[:,np.newaxis] * _damped_gaussian_integral(self.gamma*self.scale,x)
+        if self.q.shape[1] > 0:
+            ans = ans + _eval_hermite_decay(t,self.center,self.scale,self.q)
+        ans *= self.scale
+        ans *= np.exp(1j*self.omega[:,np.newaxis]*(t - self.t_ref)[np.newaxis,:])
+        return ans
+
+_cheb_int_cache = {}
+
+def _cheb_int_matrix(N,halfwidth):
+    """Returns (K, Z, T): the (N x N) matrix K with K @ c = coefficients of
+        int_{a}^{t} p(t') dt' (lbnd at the left end of the domain, in
+        physical t), truncated to degree N-1, for p = sum_k c_k T_k of degree
+        <= N-1 (exact whenever c_{N-1} = 0), and its complex Schur form
+        K = Z T Z^H, which lets (I + gamma*K) c = r be solved for many gamma
+        at once by back substitution (Z is unitary, so this is stable).
+"""
+    key = (N,float(halfwidth))
+    try:
+        return _cheb_int_cache[key]
+    except KeyError:
+        from scipy.linalg import schur
+        K = npch.chebint(np.eye(N),lbnd=-1,scl=halfwidth,axis=0)[:N,:]
+        T, Z = schur(K,output='complex')
+        _cheb_int_cache[key] = (K,Z,T)
+        return K, Z, T
+
+def _solve_shifted(Z,T,gamma,rhs):
+    """Solves (I + gamma_j K) c_j = rhs_j for every row j, with K = Z T Z^H.
+"""
+    y = rhs.dot(np.conj(Z))                     # rows of Z^H r
+    N = T.shape[0]
+    x = np.zeros_like(y)
+    for i in range(N-1,-1,-1):
+        acc = y[:,i]
+        if i < N-1:
+            acc = acc - gamma*(x[:,i+1:].dot(T[i,i+1:]))
+        x[:,i] = acc/(1 + gamma*T[i,i])
+    return x.dot(Z.T)
+
+class ChebDampedTerm:
+    """Solution of d ctilde/dt = -gamma*ctilde + u, ctilde(a) = 0, on the
+        Chebyshev domain [a,b], for u sampled at the chebpts1 nodes. Uses
+        the integral (tau) form in coefficient space,
+            (I + gamma*K) c = K u,
+        with K the Chebyshev antiderivative matrix (well conditioned for
+        any gamma >= 0; for gamma = 0 it is exactly ChebPoly.integrate()).
+        For t > b the source is off, so ctilde(t) = ctilde(b)*exp(-gamma*(t-b));
+        for t < a, ctilde = 0. Stores rho itself:
+        rho(t) = ctilde(t)*exp(1j*omega*(t - t_ref)).
+"""
+    kind = 'chebyshev'
+    def __init__(self,idx,dom,t_ref,gamma,omega,coefs):
+        self.idx = np.asarray(idx)
+        self.dom = np.array(dom,dtype='float')
+        self.t_ref = float(t_ref)
+        self.gamma = np.asarray(gamma,dtype='float')
+        self.omega = np.asarray(omega,dtype='float')
+        self.coefs = np.asarray(coefs,dtype='complex')
+
+    @classmethod
+    def from_samples(cls,idx,t,u,dom,t_ref,gamma,omega):
+        chp = ChebPoly(t,u,dom=dom)
+        b = chp.cheb_coefs                          # (n, N), degree N-1
+        n, N = b.shape
+        Np = N + 1                                  # ctilde has degree N
+        hw = chp.halfwidth
+        K, Z, T = _cheb_int_matrix(Np,hw)
+        b_pad = np.zeros((n,Np),dtype='complex')
+        b_pad[:,:N] = b
+        rhs = b_pad.dot(K.T)                        # (n, Np) = K u
+        coefs = rhs.copy()
+        damped = np.abs(gamma) > 0
+        if np.any(damped):
+            coefs[damped] = _solve_shifted(Z,T,gamma[damped],rhs[damped])
+        return cls(idx,dom,t_ref,gamma,omega,coefs)
+
+    def same_grid(self,other):
+        return (isinstance(other,ChebDampedTerm)
+                and np.allclose(self.dom,other.dom,rtol=0,atol=1E-12*max(1,np.max(np.abs(self.dom))))
+                and np.isclose(self.t_ref,other.t_ref,rtol=0,atol=1E-12*max(1,abs(self.t_ref))))
+
+    def merged(self,other):
+        idx = np.union1d(self.idx,other.idx)
+        deg = max(self.coefs.shape[1],other.coefs.shape[1])
+        coefs = np.zeros((idx.size,deg),dtype='complex')
+        gamma = np.zeros(idx.size)
+        omega = np.zeros(idx.size)
+        for term in (self,other):
+            pos = np.searchsorted(idx,term.idx)
+            coefs[pos,:term.coefs.shape[1]] += term.coefs
+            gamma[pos] = term.gamma
+            omega[pos] = term.omega
+        return ChebDampedTerm(idx,self.dom,self.t_ref,gamma,omega,coefs)
+
+    def __call__(self,t):
+        t = np.atleast_1d(np.asarray(t,dtype='float'))
+        a, b = self.dom
+        mid = (a + b)/2
+        hw = (b - a)/2
+        ans = np.zeros((self.idx.size,t.size),dtype='complex')
+        inside = (t >= a) & (t <= b)
+        if np.any(inside):
+            x = (t[inside] - mid)/hw
+            V = npch.chebvander(x,self.coefs.shape[1]-1)
+            ans[:,inside] = self.coefs.dot(V.T)
+        after = t > b
+        if np.any(after):
+            end_val = np.sum(self.coefs,axis=1)     # T_k(1) = 1
+            with np.errstate(under='ignore'):
+                decay = np.exp(-self.gamma[:,np.newaxis]*(t[after] - b)[np.newaxis,:])
+            ans[:,after] = end_val[:,np.newaxis] * decay
+        ans *= np.exp(1j*self.omega[:,np.newaxis]*(t - self.t_ref)[np.newaxis,:])
+        return ans
+
+class schrodinger_perturbative_container:
+    """Density matrix (L eigenbasis) for 'chebyshev'/'hermite' stored as a
+        list of HermiteDampedTerm / ChebDampedTerm objects, each returning
+        rho(t) itself (not the interaction-picture coefficient). Terms on the
+        same grid are merged, so sums (add_rhos) stay exact and the list only
+        grows with the number of distinct pulse grids. Since the terms hold
+        rho itself, the interaction-picture reference time t0 is bookkeeping
+        only and no per-species shift factor is needed when adding.
+"""
+    schrodinger_picture = True
+    impulsive = False
+
+    def __init__(self,terms,bool_mask,pulse_number,manifold_key,pdc,t0,*,
+                 simultaneous=1):
+        self.terms = list(terms)
+        self.bool_mask = bool_mask
+        self.pulse_number = pulse_number
+        self.manifold_key = manifold_key
+        self.pdc = pdc
+        self.t0 = t0
+        self.pdc_tuple = tuple(tuple(pdc[i,:]) for i in range(pdc.shape[0]))
+        self.simultaneous = simultaneous
+        self.n = int(np.sum(bool_mask))
+
+    @classmethod
+    def combine(cls,a,b,bool_mask,pulse_number,manifold_key,pdc,t0):
+        for c in (a,b):
+            if not getattr(c,'schrodinger_picture',False):
+                raise ValueError('Cannot add a Schrodinger-picture spectral '
+                                 'container to an interaction-picture one '
+                                 '(e.g. mixing impulsive and finite pulses); '
+                                 'set engine.damped_spectral = False to use '
+                                 'the interaction-picture spectral method')
+        terms = []
+        for term in list(a.terms) + list(b.terms):
+            for i, existing in enumerate(terms):
+                if existing.same_grid(term):
+                    terms[i] = existing.merged(term)
+                    break
+            else:
+                terms.append(term)
+        return cls(terms,bool_mask,pulse_number,manifold_key,pdc,t0)
+
+    def schrodinger(self,t):
+        t = np.atleast_1d(np.asarray(t,dtype='float'))
+        position = -np.ones(self.bool_mask.size,dtype='int')
+        position[np.where(self.bool_mask)[0]] = np.arange(self.n)
+        ans = np.zeros((self.n,t.size),dtype='complex')
+        for term in self.terms:
+            ans[position[term.idx],:] += term(t)
+        return ans
+
+    def __call__(self,t):
+        raise NotImplementedError('schrodinger_perturbative_container stores '
+                                  'rho itself; use .schrodinger(t) (the engine '
+                                  'does this in get_rho)')
